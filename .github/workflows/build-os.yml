@@ -60,3 +60,30 @@ jobs:
             out/*.iso
             out/SHA256SUMS
             out/repo/*
+
+  # Boots the ISO in QEMU, installs TotV unattended onto a virtual disk, and
+  # boots the result with BIOS and UEFI (os/tests/vm-install.sh).
+  vm-test:
+    needs: iso
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: totv-iso
+          path: out
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install QEMU
+        run: sudo apt-get update -q && sudo apt-get install -y -q qemu-system-x86 qemu-utils ovmf libarchive-tools
+      - name: Install and boot TotV in a VM
+        run: bash os/tests/vm-install.sh out/totv-*-x86_64.iso vm-test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vm-test-logs
+          path: vm-test/*.log

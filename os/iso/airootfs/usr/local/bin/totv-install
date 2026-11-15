@@ -8,7 +8,7 @@
 #       ROOT_PASSWORD=... (empty: root locked, use sudo)
 #       TIMEZONE=UTC  LOCALE=en_US.UTF-8  KEYMAP=us  AUTOLOGIN=yes
 #       OPTIONS="wine"  GAME_ARCHIVE=/path (optional)  CONFIRM_WIPE=yes
-#       REBOOT=no
+#       REBOOT=no  KERNEL_CMDLINE="console=ttyS0" (extra kernel parameters)
 #
 # What it does: one GPT disk layout that boots on BIOS and UEFI computers
 # (1 MiB BIOS boot, 1 GiB EFI system partition mounted at /boot, ext4 root),
@@ -34,7 +34,7 @@ readonly TITLE="TotV ${TOTV_VERSION} installer"
 
 DISK='' HOSTNAME_='' USERNAME='' USER_PASSWORD='' ROOT_PASSWORD=''
 TIMEZONE=UTC LOCALE=en_US.UTF-8 KEYMAP=us AUTOLOGIN=yes OPTIONS='wine'
-GAME_ARCHIVE='' CONFIRM_WIPE='' REBOOT='' OFFLINE=0 INTERACTIVE=1
+GAME_ARCHIVE='' CONFIRM_WIPE='' REBOOT='' KERNEL_CMDLINE='' OFFLINE=0 INTERACTIVE=1
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -400,6 +400,10 @@ do_bootloader() {
     in_target mkinitcpio -P
     sed -i -e 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="TotV"/' \
            -e 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=2/' "$TARGET/etc/default/grub"
+    if [[ -n $KERNEL_CMDLINE ]]; then
+        [[ $KERNEL_CMDLINE =~ ^[A-Za-z0-9_.,=:/\ -]+$ ]] || die "KERNEL_CMDLINE has characters that are not allowed"
+        sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"|GRUB_CMDLINE_LINUX_DEFAULT=\"\1 $KERNEL_CMDLINE\"|" "$TARGET/etc/default/grub"
+    fi
     in_target grub-install --target=i386-pc --recheck "$DISK"
     # --removable: \EFI\BOOT\BOOTX64.EFI, found by every UEFI firmware
     # without a boot entry, so the disk boots on other computers too.
@@ -449,7 +453,7 @@ load_answers() {
             USER_PASSWORD) USER_PASSWORD=$v ;; ROOT_PASSWORD) ROOT_PASSWORD=$v ;;
             TIMEZONE) TIMEZONE=$v ;; LOCALE) LOCALE=$v ;; KEYMAP) KEYMAP=$v ;;
             AUTOLOGIN) AUTOLOGIN=$v ;; OPTIONS) OPTIONS=$v ;; GAME_ARCHIVE) GAME_ARCHIVE=$v ;;
-            CONFIRM_WIPE) CONFIRM_WIPE=$v ;; REBOOT) REBOOT=$v ;;
+            CONFIRM_WIPE) CONFIRM_WIPE=$v ;; REBOOT) REBOOT=$v ;; KERNEL_CMDLINE) KERNEL_CMDLINE=$v ;;
             *) die "unknown key '$k' in $f" ;;
         esac
     done <"$f"
