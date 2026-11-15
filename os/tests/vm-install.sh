@@ -114,8 +114,9 @@ boot() {
 
 rc=0
 boot bios || rc=1
-code=$(ls /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/edk2/x64/OVMF_CODE.4m.fd 2>/dev/null | head -n1)
-vars=$(ls /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd /usr/share/edk2/x64/OVMF_VARS.4m.fd 2>/dev/null | head -n1)
+first() { local f; for f; do [[ -f $f ]] && { echo "$f"; return 0; }; done; return 0; }
+code=$(first /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/edk2/x64/OVMF_CODE.4m.fd)
+vars=$(first /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd /usr/share/edk2/x64/OVMF_VARS.4m.fd)
 if [[ -n $code && -n $vars ]]; then
     cp "$vars" vars.fd
     boot uefi -drive if=pflash,format=raw,readonly=on,file="$code" -drive if=pflash,format=raw,file=vars.fd || rc=1
