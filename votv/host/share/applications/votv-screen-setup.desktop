@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=VotV Screen Setup
+Comment=Line the in-game PC screen up with your monitor; second-screen inventory; in-game screen refresh
+Exec=votv-screen-setup
+Icon=video-display
+Categories=Settings;Game;
+StartupWMClass=votv-screen-setup

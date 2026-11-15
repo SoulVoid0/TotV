@@ -1,0 +1,45 @@
+#!/bin/bash
+# Inside the TotV OS compositor: start the bridge, the KDE PC desktop and the
+# inventory screen, then keep the game running. When this script exits, KWin exits
+# and the user is back at the tty login (which autologin restarts).
+set -u
+
+RT="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/votv-os"
+mkdir -p "$RT/frames"
+PY="${VOTV_OS_PYTHON:-/usr/lib/votv-os/python}"
+
+python3 -c "import sys; sys.path.insert(0, '$PY'); from votvos.ipc import reset_session; reset_session()"
+
+children=()
+start() { "$@" & children+=("$!"); }
+cleanup() {
+    for pid in "${children[@]}"; do kill "$pid" 2>/dev/null; done
+    wait
+}
+trap cleanup EXIT
+
+dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE DISPLAY 2>/dev/null
+
+start votv-os-bridge
+# Wait for the bridge to publish the screens: the PC desktop is sized from them.
+for _ in $(seq 50); do [ -s "$RT/screens.json" ] && break; sleep 0.1; done
+start votv-pc-session
+start votv-inventory
+
+# The game. A crash restarts it; three crashes within two minutes end the session
+# so a broken install does not loop forever.
+fails=()
+while :; do
+    started=$(date +%s)
+    votv-os-launch-game
+    code=$?
+    [ -e "$RT/exit-session" ] && { rm -f "$RT/exit-session"; break; }
+    [ "$code" -eq 0 ] && break            # the player quit the game from its menu
+    now=$(date +%s)
+    fails+=("$now")
+    recent=0
+    for t in "${fails[@]}"; do [ $((now - t)) -lt 120 ] && recent=$((recent + 1)); done
+    echo "game exited with $code after $((now - started))s ($recent recent failures)"
+    [ "$recent" -ge 3 ] && break
+    sleep 2
+done

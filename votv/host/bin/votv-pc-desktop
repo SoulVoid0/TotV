@@ -1,0 +1,18 @@
+#!/bin/bash
+# Inside the nested PC compositor: a Plasma desktop session.
+set -u
+export XDG_CURRENT_DESKTOP=KDE
+export XDG_SESSION_DESKTOP=KDE
+export KDE_FULL_SESSION=true
+export KDE_SESSION_VERSION=6
+export QT_QPA_PLATFORM=wayland
+dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP KDE_FULL_SESSION 2>/dev/null
+
+command -v kded6 >/dev/null && kded6 &
+# Desktop autostart entries (XDG), including the user's own.
+for f in /etc/xdg/autostart/votv-*.desktop "$HOME"/.config/autostart/*.desktop; do
+    [ -e "$f" ] || continue
+    exec_line=$(sed -n 's/^Exec=//p' "$f" | head -n1)
+    [ -n "$exec_line" ] && sh -c "$exec_line" &
+done
+exec plasmashell --no-respawn

@@ -1,0 +1,42 @@
+#!/usr/bin/python3
+"""Add the TotV OS engine settings to the game's user Engine.ini (idempotent).
+
+Only settings that change no pixel: garbage-collection threading, streaming
+budget limits and loader threading. The player's own lines are kept."""
+import sys
+from pathlib import Path
+
+BEGIN, END = "; >>> TotV OS (managed, edits inside are replaced)", "; <<< TotV OS"
+BLOCK = """[SystemSettings]
+gc.MultithreadedDestructionEnabled=1
+s.ForceGCAfterLevelStreamedOut=0
+s.ContinuouslyIncrementalGCWhileLevelsPendingPurge=1
+r.Streaming.LimitPoolSizeToVRAM=1
+r.ShaderPipelineCache.Enabled=1
+a.ParallelAnimUpdate=1
+a.ParallelAnimEvaluation=1
+
+[/Script/Engine.StreamingSettings]
+s.AsyncLoadingThreadEnabled=True
+
+[/Script/Engine.GarbageCollectionSettings]
+gc.MultithreadedDestructionEnabled=True
+"""
+
+
+def main(path: str) -> int:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    text = p.read_text(errors="replace") if p.exists() else ""
+    if BEGIN in text and END in text:
+        head, rest = text.split(BEGIN, 1)
+        tail = rest.split(END, 1)[1]
+        text = head.rstrip("\n") + ("\n" if head.strip() else "") + tail.lstrip("\n")
+    new = (text.rstrip("\n") + "\n\n" if text.strip() else "") + f"{BEGIN}\n{BLOCK}{END}\n"
+    if new != (p.read_text(errors="replace") if p.exists() else None):
+        p.write_text(new)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1]) if len(sys.argv) == 2 else 2)

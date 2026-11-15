@@ -1,0 +1,29 @@
+#!/bin/bash
+# TotV OS session: started on tty1 after autologin (via /usr/lib/totv/session.d/50-votv-os.sh).
+# Runs KWin (Wayland) as the compositor on the real screens, with the votv-os-wm script
+# placing the game, the KDE "PC" desktop and the second-screen inventory.
+set -u
+
+RT="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/votv-os"
+mkdir -p "$RT/frames"
+LOG="$RT/session.log"
+exec >>"$LOG" 2>&1
+echo "== votv-os-session $(date -Is)"
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=KDE
+export XDG_SESSION_DESKTOP=votv-os
+export KDE_SESSION_VERSION=6
+export QT_QPA_PLATFORM=wayland
+export MOZ_ENABLE_WAYLAND=1
+
+# Enable the window-placement script (idempotent).
+if command -v kwriteconfig6 >/dev/null; then
+    kwriteconfig6 --file kwinrc --group Plugins --key votv-os-wmEnabled true
+    # No screen edges / overview gestures over the game.
+    kwriteconfig6 --file kwinrc --group Effect-overview --key BorderActivate 9
+    kwriteconfig6 --file kwinrc --group ElectricBorders --key TopLeft None
+fi
+
+exec dbus-run-session -- kwin_wayland --xwayland --no-lockscreen \
+    --exit-with-session=/usr/lib/votv-os/votv-os-session-main
