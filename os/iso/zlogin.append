@@ -1,0 +1,6 @@
+
+# TotV: start the installer on the first console.
+if [[ $(tty) == /dev/tty1 && -z ${TOTV_INSTALLER_STARTED:-} ]]; then
+    export TOTV_INSTALLER_STARTED=1
+    totv-install
+fi

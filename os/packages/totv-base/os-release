@@ -1,0 +1,12 @@
+NAME="TotV"
+PRETTY_NAME="TotV"
+ID=totv
+ID_LIKE=arch
+BUILD_ID=rolling
+VERSION_ID=@VERSION@
+ANSI_COLOR="38;2;23;147;209"
+HOME_URL="https://github.com/SoulVoid0/TotV"
+DOCUMENTATION_URL="https://github.com/SoulVoid0/TotV/tree/main/os"
+SUPPORT_URL="https://github.com/SoulVoid0/TotV/issues"
+BUG_REPORT_URL="https://github.com/SoulVoid0/TotV/issues"
+LOGO=archlinux-logo

@@ -1,0 +1,2 @@
+# TotV: members of wheel (the user created by the installer) may use sudo.
+%wheel ALL=(ALL:ALL) ALL

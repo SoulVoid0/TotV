@@ -1,0 +1,9 @@
+#!/bin/sh
+# Makes /etc/os-release name TotV. The "filesystem" package owns that file
+# and restores Arch's on upgrade; a pacman hook runs this again afterwards.
+set -e
+src=/usr/lib/totv/os-release
+[ -r "$src" ] || exit 0
+rm -f /etc/os-release
+cp "$src" /etc/os-release
+chmod 0644 /etc/os-release

@@ -1,0 +1,62 @@
+name: Build TotV OS
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: ['os/**', 'votv/host/**', '.github/workflows/build-os.yml']
+  pull_request:
+    paths: ['os/**', 'votv/host/**', '.github/workflows/build-os.yml']
+  workflow_dispatch:
+    inputs:
+      online:
+        description: 'Online installer (smaller ISO, packages downloaded at install time)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  iso:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: archlinux:latest
+      options: --privileged
+    steps:
+      - name: Install build tools
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Syu --noconfirm --needed archiso base-devel git
+      - uses: actions/checkout@v4
+      - name: Build packages and ISO
+        run: |
+          args=(--out out --work /tmp/totv-build)
+          [[ "${{ inputs.online }}" == "true" ]] && args+=(--online)
+          bash os/build.sh "${args[@]}"
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: totv-iso
+          path: |
+            out/*.iso
+            out/SHA256SUMS
+          compression-level: 0
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: totv-repo
+          path: out/repo/
+          retention-days: 14
+      # A tag (v0.1.0, ...) publishes the ISO and the pacman repository; the
+      # installed systems' [totv] repository is .../releases/latest/download.
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/*.iso
+            out/SHA256SUMS
+            out/repo/*

@@ -1,0 +1,59 @@
+# LSIW (Linux Subsystem for Improved Wine), packaged for TotV.
+# Upstream: https://github.com/SoulVoid0/LSIW
+#
+# The TotV system configuration (/etc/lsiw/lsiw.conf, C: = /) is shipped by
+# totv-base; this package installs upstream's example as documentation.
+
+pkgbase=lsiw
+pkgname=(lsiw lsiw-control)
+pkgver=1.11.0
+pkgrel=1
+pkgdesc='Run Windows x86-64 programs on Linux with a native engine'
+arch=(x86_64)
+url='https://github.com/SoulVoid0/LSIW'
+license=(AGPL-3.0-or-later)
+makedepends=(git gcc make pkgconf gtk4 desktop-file-utils)
+options=(!lto !debug)
+source=("$pkgbase::git+$url.git#tag=v$pkgver"
+        0001-cdrive-at-linux-root.patch)
+sha256sums=('SKIP'
+            'bfe10122674a133935637f2b4704e4e4d3b6e31f4530ce5f16f96c5b5382d089')
+
+_make_vars=(PREFIX=/usr BINDIR=/usr/bin LIBEXECDIR=/usr/lib DATADIR=/usr/share
+            SYSCONFDIR=/etc BINFMTDIR=/usr/lib/binfmt.d TMPFILESDIR=/usr/lib/tmpfiles.d
+            METAINFODIR=/usr/share/metainfo)
+
+prepare() {
+  cd "$pkgbase"
+  patch -Np1 -i "$srcdir/0001-cdrive-at-linux-root.patch"
+}
+
+build() {
+  cd "$pkgbase"
+  make GUI="${LSIW_GUI:-yes}" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" "${_make_vars[@]}"
+}
+
+package_lsiw() {
+  depends=(glibc hicolor-icon-theme)
+  optdepends=('wine: fallback engine for programs the native engine cannot run'
+              'zenity: error dialogs when a program is started from the desktop'
+              'git: find new Wine and Proton releases (lsiw runners)'
+              'unzip: unpack Proton-Tkg builds')
+  cd "$pkgbase"
+  make DESTDIR="$pkgdir" GUI=no "${_make_vars[@]}" install-lsiw
+  # /etc/lsiw/lsiw.conf belongs to totv-base.
+  install -Dm644 "$pkgdir/etc/lsiw/lsiw.conf" "$pkgdir/usr/share/doc/lsiw/lsiw.conf.example"
+  rm -r "$pkgdir/etc"
+  install -Dm644 README.md -t "$pkgdir/usr/share/doc/lsiw"
+}
+
+package_lsiw-control() {
+  pkgdesc='LSIW Control, the GTK 4 settings app for LSIW'
+  depends=(lsiw gtk4)
+  cd "$pkgbase"
+  if [[ ! -x lsiw-control ]]; then
+    echo "lsiw-control was not built (LSIW_GUI=no); packaging an empty lsiw-control" >&2
+    return 0
+  fi
+  make DESTDIR="$pkgdir" GUI=yes "${_make_vars[@]}" install-gui
+}
