@@ -57,7 +57,7 @@ empty one disables it). A hook can `exec` a session, e.g.
 ### Extensions (installer hooks)
 
 `build.sh` copies `votv/host/` (and `os/extensions/<name>/`), when it has an
-`install.sh`, into the ISO as `/opt/totv/hooks/<name>/`. After the base
+`install.sh`, into the ISO as `/opt/totv/hooks/<name>/`. For `votv`, `votv/mod/` goes to `/opt/totv/hooks/votv/mod/`, and an offline build runs `votv/host/bin/votv-os-fetch-deps` to put shimloader in `/opt/totv/hooks/votv/vendor/shimloader/`. After the base
 system is installed and the user exists, the installer runs
 `install.sh /mnt` with:
 

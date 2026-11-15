@@ -133,6 +133,17 @@ for h in "${!hooks[@]}"; do
     mkdir -p "$profile/airootfs/opt/totv/hooks"
     cp -a "${hooks[$h]}" "$profile/airootfs/opt/totv/hooks/$h"
 done
+# The Voices of the Void extension: its mod files sit next to install.sh
+# (hooks/votv/mod), and an offline ISO also carries shimloader.
+if [[ -n ${hooks[votv]:-} ]]; then
+    vdir=$profile/airootfs/opt/totv/hooks/votv
+    [[ -d $top/votv/mod ]] && cp -a "$top/votv/mod" "$vdir/mod"
+    fetch=$top/votv/host/bin/votv-os-fetch-deps
+    if ((offline)) && [[ -f $fetch ]]; then
+        msg "Fetching shimloader for the votv extension"
+        bash "$fetch" "$vdir/vendor/shimloader"
+    fi
+fi
 
 # The installer's package sources: only the bundled repository (offline),
 # or the bundled repository first and then the Arch mirrors (online).
