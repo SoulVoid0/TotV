@@ -65,7 +65,7 @@ for dir in "$work"/packages/*/; do
     name=$(basename "$dir")
     # makedepends/depends from the official repositories; TotV's own
     # packages are installed from the ones built before (lsiw before totv-base).
-    mapfile -t deps < <(cd "$dir" && bash -c 'source ./PKGBUILD; printf "%s\n" "${makedepends[@]}"')
+    mapfile -t deps < <(cd "$dir" && bash -c 'source ./PKGBUILD; printf "%s\n" "${makedepends[@]}"' | sed '/^$/d')
     ((${#deps[@]})) && pacman -S --needed --noconfirm "${deps[@]}"
     msg "makepkg $name"
     (cd "$dir" && runuser -u "$builder" -- makepkg -f --nodeps --noconfirm)
