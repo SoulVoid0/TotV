@@ -174,7 +174,7 @@ for h in "${!hooks[@]}"; do
 done
 # Boot menu entries.
 grep -rlZ 'Arch Linux install medium' "$profile"/{efiboot,grub,syslinux} 2>/dev/null |
-    xargs -0r sed -i 's/Arch Linux install medium/TotV installer/g'
+    xargs -0r sed -i 's/Arch Linux install medium/TotV installer/g' || true
 
 # ---------------------------------------------------------------------------
 msg "Building the ISO"
