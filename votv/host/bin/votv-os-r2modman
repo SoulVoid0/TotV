@@ -22,7 +22,7 @@ REPO="${R2MODMAN_REPO:-ebkr/r2modmanPlus}"
 
 own() {
     local ids
-    ids=$(awk -F: '$1=="votv"{print $3":"$4}' "$R/etc/passwd" 2>/dev/null)
+    ids=$(awk -F: '$1=="votv"{print $3":"$4}' "$R/etc/passwd" 2>/dev/null || true)
     [ -n "$ids" ] && chown -R "$ids" "$@"
     return 0
 }

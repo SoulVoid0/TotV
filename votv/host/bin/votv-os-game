@@ -158,6 +158,18 @@ def fetch(dest, version=None):
     out = dest / name
     print(f"downloading {name} ...", file=sys.stderr)
     subprocess.run(["curl", "-fL", "--retry", "3", "-A", UA, "-o", str(out), url], check=True)
+    # Name it by what it is (itch.io may not say): zip, 7z or rar.
+    with open(out, "rb") as f:
+        head = f.read(6)
+    ext = ".7z" if head.startswith(b"7z\xbc\xaf\x27\x1c") else ".rar" if head.startswith(b"Rar!") \
+        else ".zip" if head.startswith(b"PK") else None
+    if ext is None:
+        raise SystemExit(f"votv-os-game: the download is not an archive (starts with {head!r}); itch.io may have sent a web page")
+    if out.suffix.lower() != ext:
+        new = out.with_suffix(ext)
+        out.rename(new)
+        out = new
+    print(f"downloaded {out.name} ({out.stat().st_size // (1024 * 1024)} MiB)", file=sys.stderr)
     return out
 
 

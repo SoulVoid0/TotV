@@ -26,7 +26,7 @@ VR="$R/.VotV"
 SHIM="$R/usr/lib/votv-os/shimloader"
 own() {   # the game belongs to the votv system user (it runs the game; UE4SS logs next to it)
     local ids
-    ids=$(awk -F: '$1=="votv"{print $3":"$4}' "$R/etc/passwd" 2>/dev/null)
+    ids=$(awk -F: '$1=="votv"{print $3":"$4}' "$R/etc/passwd" 2>/dev/null || true)
     [ -n "$ids" ] && chown -R "$ids" "$1"
     return 0
 }
@@ -74,11 +74,15 @@ echo "Unpacking $SRC ..."
 if [ -d "$SRC" ]; then
     cp -a "$SRC"/. "$tmp/"
 else
-    case "${SRC,,}" in
-        *.zip) unzip -q "$SRC" -d "$tmp" ;;
-        *.7z|*.rar) 7z x -y -bd -o"$tmp" "$SRC" >/dev/null ;;
-        *.tar.*|*.tar|*.tgz) tar -xf "$SRC" -C "$tmp" ;;
-        *) 7z x -y -bd -o"$tmp" "$SRC" >/dev/null ;;
+    # By its contents, not its name: itch.io builds come as .zip, .7z or .rar.
+    magic=$(head -c 6 "$SRC" | od -An -tx1 | tr -d ' \n')
+    case "$magic" in
+        504b0304*) unzip -q "$SRC" -d "$tmp" || 7z x -y -bd -o"$tmp" "$SRC" >/dev/null ;;
+        377abcaf271c*|52617221*) 7z x -y -bd -o"$tmp" "$SRC" >/dev/null ;;
+        *) case "${SRC,,}" in
+               *.tar.*|*.tar|*.tgz) tar -xf "$SRC" -C "$tmp" ;;
+               *) 7z x -y -bd -o"$tmp" "$SRC" >/dev/null || bsdtar -xf "$SRC" -C "$tmp" ;;
+           esac ;;
     esac
 fi
 
