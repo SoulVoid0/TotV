@@ -3,15 +3,17 @@
 # GitHub release assets cannot be larger). The full OS is the system image, built
 # afterwards by os/system/build-system.sh from out/repo.
 #
-#   sudo os/build.sh [--online] [--out DIR] [--work DIR]
+#   sudo os/build.sh [--offline] [--out DIR] [--work DIR]
 #
 # Needs Arch Linux (or an archlinux container run with --privileged) with
 # archiso and base-devel installed. Steps:
 #   1. build os/packages/* (lsiw, totv-base, votv-os: the repository's votv/ folder is
 #      staged next to its PKGBUILD) with makepkg
-#   2. unless --online: download the base packages (os/target-packages.x86_64,
-#      os/optional-packages.x86_64) with their dependencies, so the installer's package
-#      fallback needs the network only for the desktop and the game
+#   2. with --offline only: also bundle the base packages (os/target-packages.x86_64,
+#      os/optional-packages.x86_64) with their dependencies for the installer's package
+#      fallback (that ISO is over 2 GiB: not for GitHub releases). By default the ISO
+#      holds TotV's own packages only: it installs from the system image, and the
+#      package fallback downloads the rest
 #   3. make the "totv" repository of all of them
 #   4. take archiso's releng profile, add the TotV installer (os/iso) and the
 #      repository, and build the ISO with mkarchiso; fail if it is 2 GiB or more
@@ -27,11 +29,12 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 top=$(cd "$here/.." && pwd)
 out=$top/out
 work=/tmp/totv-build
-offline=1
+offline=0
 
 while (($#)); do
     case $1 in
         --online) offline=0 ;;
+        --offline) offline=1 ;;
         --out) out=$(realpath -m "$2"); shift ;;
         --work) work=$(realpath -m "$2"); shift ;;
         -h|--help) sed -n '2,23s/^# \{0,1\}//p' "$0"; exit 0 ;;
