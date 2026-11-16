@@ -22,6 +22,7 @@ oldge=$(readlink /usr/share/totv/proton/current || true)
 votv-os-proton update
 [ -z "$oldge" ] && [ ! -e /usr/share/totv/proton/current ] && votv-os-proton install
 [ "$(readlink /usr/share/totv/proton/current || true)" != "$oldge" ] && touch /run/totv/votv-os/restart-game
+votv-os-proton fix-owner
 votv-os-r2modman seed
 votv-os-install-game --shimloader-only 2>/dev/null || true
 # A new TotVOS mod (from pacman) loads at the next game start.

@@ -6,7 +6,7 @@
 #  - totv-update (in-place updates, /usr/lib/totv/update.d hooks), totv-adduser
 
 pkgname=totv-base
-pkgver=0.2.2
+pkgver=0.2.3
 pkgrel=1
 pkgdesc='TotV operating system base configuration'
 arch=(any)

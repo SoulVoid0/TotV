@@ -300,6 +300,22 @@ def ensure_proton_profile() -> None:
         print(f"totvd: cannot check /users/steamuser: {e}", file=sys.stderr)
 
 
+def ensure_proton_owner() -> None:
+    """GE-Proton (/usr/share/totv/proton) belongs to votv: Proton writes its default
+    prefix and its lock (dist.lock) into its own folder. 0.2.2 installed it as root."""
+    top = Path("/usr/share/totv/proton")
+    try:
+        votv = pwd.getpwnam(paths.SYSTEM_USER)
+        if not top.is_dir() or top.stat().st_uid == votv.pw_uid:
+            return
+        for d, dirs, files in os.walk(top):
+            for n in [d, *(os.path.join(d, x) for x in dirs + files)]:
+                os.lchown(n, votv.pw_uid, votv.pw_gid)
+        print(f"totvd: {top} now belongs to {paths.SYSTEM_USER}", file=sys.stderr)
+    except (KeyError, OSError) as e:
+        print(f"totvd: cannot fix the owner of {top}: {e}", file=sys.stderr)
+
+
 def main() -> int:
     if len(sys.argv) == 3 and sys.argv[1] == "--ended":
         from .bridge import totvd
@@ -310,6 +326,7 @@ def main() -> int:
         return 1
     RT.mkdir(parents=True, exist_ok=True)
     ensure_proton_profile()
+    ensure_proton_owner()
     helper = Helper()
     path = paths.LOGIN_SOCKET
     if os.environ.get("LISTEN_FDS") == "1":

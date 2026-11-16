@@ -2,7 +2,8 @@
 # GE-Proton for Voices of the Void, installed system-wide in /usr/share/totv/proton/
 # (/usr/share/totv/proton/current -> the version in use). The game runs with it in a
 # prefix of its own (see votv-os-launch-game); LSIW keeps its own runners for people's
-# own programs.
+# own programs. It belongs to the game's user, votv: Proton builds its default prefix and
+# takes its lock (dist.lock) inside its own folder.
 #
 #   votv-os-proton install [--root R]   the latest GE-Proton release (SHA-512 checked)
 #   votv-os-proton update [--check]     a newer release, if there is one
@@ -18,6 +19,12 @@ REPO="${GE_PROTON_REPO:-GloriousEggroll/proton-ge-custom}"
 
 latest_json() { curl -fsSL --retry 3 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/releases/latest"; }
 current() { basename "$(readlink "$TOP/current" 2>/dev/null || echo none)"; }
+own() {
+    local ids
+    ids=$(awk -F: '$1=="votv"{print $3":"$4}' "$R/etc/passwd" 2>/dev/null || true)
+    [ -n "$ids" ] && chown -R "$ids" "$@"
+    return 0
+}
 
 install_ge() {
     local json tag tar sum tmp
@@ -48,6 +55,7 @@ print(a[t], a.get(s, "-"))' <<<"$json")
     mv "$TOP/$tag.new" "$TOP/$tag"
     old=$(current)
     ln -sfn "$tag" "$TOP/current"
+    own "$TOP"
     [ "$old" != none ] && [ "$old" != "$tag" ] && rm -rf "${TOP:?}/$old"
     echo "GE-Proton $tag installed in ${TOP#"$R"}/$tag"
 }
@@ -65,5 +73,6 @@ case "$cmd" in
             echo "GE-Proton $cur is the newest"
         fi ;;
     path) readlink -f "$TOP/current" ;;
+    fix-owner) own "$TOP" ;;
     *) sed -n '2,10s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac
