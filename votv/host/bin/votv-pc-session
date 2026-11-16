@@ -1,0 +1,29 @@
+#!/bin/bash
+# The KDE Plasma desktop that is the in-game PC: a nested kwin_wayland (a window of
+# the TotV OS compositor) running plasmashell, sized like the primary monitor, with
+# its own D-Bus session bus. The bridge captures it for the in-game screen and the
+# votv-os-wm KWin script shows it fullscreen while the player uses the PC.
+set -u
+
+RT="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/votv-os"
+read -r W H < <(python3 - "$RT/screens.json" <<'EOF'
+import json, sys
+try:
+    s = json.load(open(sys.argv[1]))["screens"][0]
+    print(int(s["w"] * s.get("scale", 1)), int(s["h"] * s.get("scale", 1)))
+except Exception:
+    print(1920, 1080)
+EOF
+)
+
+export KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1
+while :; do
+    dbus-run-session -- sh -c '
+        echo "$DBUS_SESSION_BUS_ADDRESS" > "$1/pc-session.bus"
+        echo $$ > "$1/pc-session.pid"
+        exec kwin_wayland --socket votv-pc --width "$2" --height "$3" --xwayland \
+             --no-lockscreen --exit-with-session=/usr/lib/votv-os/votv-pc-desktop
+    ' sh "$RT" "$W" "$H"
+    rm -f "$RT/pc-session.bus" "$RT/pc-session.pid"
+    sleep 2   # plasmashell or kwin crashed: bring the PC back
+done

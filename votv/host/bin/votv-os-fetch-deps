@@ -1,0 +1,47 @@
+#!/bin/bash
+# Fetch shimloader (Thunderstore's unreal_shimloader: UE4SS + its loader) into DIR,
+# as dwmapi.dll, UE4SS.dll and UE4SS-settings.ini. Used by the installer, and by the
+# ISO build so offline installs have it:   votv-os-fetch-deps DIR
+set -euo pipefail
+DIR="${1:?usage: votv-os-fetch-deps DIR}"
+VERSION="${SHIMLOADER_VERSION:-1.1.7}"
+mkdir -p "$DIR"
+[ -f "$DIR/dwmapi.dll" ] && [ -f "$DIR/UE4SS.dll" ] && { echo "shimloader already in $DIR"; exit 0; }
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+stage() {   # $1: a folder containing dwmapi.dll and UE4SS.dll somewhere below
+    local d
+    d=$(dirname "$(find "$1" -type f -iname 'dwmapi.dll' -print -quit)")
+    [ -f "$d/UE4SS.dll" ] || return 1
+    cp -f "$d/dwmapi.dll" "$d/UE4SS.dll" "$DIR/"
+    [ -f "$d/UE4SS-settings.ini" ] && cp -f "$d/UE4SS-settings.ini" "$DIR/"
+    [ -f "$d/LICENSE" ] && cp -f "$d/LICENSE" "$DIR/LICENSE.UE4SS"
+    return 0
+}
+
+unpack_zip() { mkdir -p "$2"; if command -v bsdtar >/dev/null; then bsdtar -xf "$1" -C "$2"; else unzip -q "$1" -d "$2"; fi; }
+
+# 0. A copy you already have (folder or zip): SHIMLOADER_FROM=...
+if [ -n "${SHIMLOADER_FROM:-}" ]; then
+    if [ -d "$SHIMLOADER_FROM" ]; then stage "$SHIMLOADER_FROM"; else unpack_zip "$SHIMLOADER_FROM" "$tmp/local" && stage "$tmp/local"; fi \
+        && { echo "shimloader from $SHIMLOADER_FROM -> $DIR"; exit 0; }
+    echo "no dwmapi.dll + UE4SS.dll in $SHIMLOADER_FROM" >&2
+    exit 1
+fi
+
+# 1. Thunderstore package (the version the VotV community uses).
+url="https://thunderstore.io/package/download/Thunderstore/unreal_shimloader/$VERSION/"
+if curl -fsSL --retry 3 -o "$tmp/shim.zip" "$url" && unpack_zip "$tmp/shim.zip" "$tmp/ts" && stage "$tmp/ts"; then
+    echo "shimloader $VERSION from Thunderstore -> $DIR"
+    exit 0
+fi
+# 2. The package as published in the shimloader source repository (no git needed).
+src="https://codeload.github.com/thunderstore-io/unreal-shimloader/tar.gz/refs/heads/main"
+if mkdir -p "$tmp/gh" && curl -fsSL --retry 3 "$src" | tar -xz -C "$tmp/gh" && stage "$tmp/gh"; then
+    echo "shimloader from github.com/thunderstore-io/unreal-shimloader -> $DIR"
+    exit 0
+fi
+echo "could not download shimloader" >&2
+exit 1

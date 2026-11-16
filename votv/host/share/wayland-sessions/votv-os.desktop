@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=TotV OS (Voices of the Void)
+Comment=Boot into your Voices of the Void save, with the in-game PC as a KDE Plasma desktop
+Exec=votv-os-session
+DesktopNames=KDE

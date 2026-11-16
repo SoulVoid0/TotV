@@ -1,0 +1,66 @@
+#!/bin/bash
+# Install Voices of the Void 0.9.0n for TotV OS from a zip / 7z / folder, and put
+# shimloader (UE4SS) next to the game binary.
+#   votv-os-install-game [--root DIR] [--owner USER] ARCHIVE_OR_FOLDER
+set -euo pipefail
+
+ROOT=/
+OWNER=""
+while [ $# -gt 1 ]; do
+    case "$1" in
+        --root) ROOT="$2"; shift 2 ;;
+        --owner) OWNER="$2"; shift 2 ;;
+        *) break ;;
+    esac
+done
+SRC="${1:?usage: votv-os-install-game [--root DIR] [--owner USER] ARCHIVE_OR_FOLDER}"
+DEST="${ROOT%/}/opt/votv"
+SHIM="${ROOT%/}/usr/lib/votv-os/shimloader"
+
+[ -e "$SRC" ] || { echo "not found: $SRC" >&2; exit 1; }
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+echo "Unpacking $SRC ..."
+if [ -d "$SRC" ]; then
+    cp -a "$SRC"/. "$tmp/"
+else
+    case "${SRC,,}" in
+        *.zip) unzip -q "$SRC" -d "$tmp" ;;
+        *.7z|*.rar) 7z x -y -bd -o"$tmp" "$SRC" >/dev/null ;;
+        *.tar.*|*.tar|*.tgz) tar -xf "$SRC" -C "$tmp" ;;
+        *) 7z x -y -bd -o"$tmp" "$SRC" >/dev/null ;;
+    esac
+fi
+
+exe=$(find "$tmp" -type f -iname 'VotV-Win64-Shipping.exe' -print -quit)
+[ -n "$exe" ] || { echo "this does not look like Voices of the Void (no VotV-Win64-Shipping.exe)" >&2; exit 1; }
+# The game root is three levels above the binary: <root>/VotV/Binaries/Win64/<exe>.
+game_root=$(dirname "$(dirname "$(dirname "$(dirname "$exe")")")")
+
+rm -rf "$DEST.new"
+mkdir -p "$(dirname "$DEST")"
+mv "$game_root" "$DEST.new"
+rm -rf "$DEST.old"
+[ -e "$DEST" ] && mv "$DEST" "$DEST.old"
+mv "$DEST.new" "$DEST"
+rm -rf "$DEST.old"
+
+win64=$(dirname "$(find "$DEST" -type f -iname 'VotV-Win64-Shipping.exe' -print -quit)")
+if [ -f "$SHIM/dwmapi.dll" ]; then
+    cp -f "$SHIM/dwmapi.dll" "$SHIM/UE4SS.dll" "$win64/"
+    [ -f "$win64/UE4SS-settings.ini" ] || cp -f "$SHIM/UE4SS-settings.ini" "$win64/"
+    # No UE4SS debug window over the game.
+    sed -i 's/^\(GuiConsoleEnabled\|GuiConsoleVisible\|ConsoleEnabled\) *= *1/\1 = 0/' "$win64/UE4SS-settings.ini" || true
+else
+    echo "warning: shimloader is not staged in $SHIM; run votv-os-fetch-deps" >&2
+fi
+
+# UE4SS writes its log next to the binary; the player's group may write there.
+if getent group cdrive >/dev/null 2>&1 || grep -q '^cdrive:' "${ROOT%/}/etc/group" 2>/dev/null; then
+    chgrp -R cdrive "$DEST" 2>/dev/null || true
+    chmod -R g+rwX "$DEST"
+elif [ -n "$OWNER" ]; then
+    chown -R "$OWNER" "$DEST" 2>/dev/null || true
+fi
+echo "Voices of the Void installed in $DEST (binary: ${win64#"${ROOT%/}"})"

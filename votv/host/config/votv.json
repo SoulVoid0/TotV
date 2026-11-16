@@ -1,0 +1,6 @@
+{
+  "autoload": { "enabled": true, "mode": 0 },
+  "pc": { "replace_ingame_ui": true, "ingame_fps": 2, "ingame_width": 1024, "align_camera": true },
+  "inventory": { "second_screen": "auto" },
+  "perf": { "enabled": true }
+}

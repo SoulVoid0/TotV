@@ -1,0 +1,50 @@
+#!/bin/bash
+# Start Voices of the Void 0.9.0n through LSIW (Proton, else Wine) with shimloader
+# loading the TotVOS mod. C:\ is / under TotV OS, so every path below is the Linux
+# path written the Windows way.
+set -u
+
+GAME_DIR="${VOTV_GAME_DIR:-/opt/votv}"
+LIB=/usr/lib/votv-os
+RT="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/votv-os"
+win() { printf 'C:%s' "$1" | tr '/' '\\'; }
+
+exe=$(find "$GAME_DIR" -maxdepth 5 -type f -iname 'VotV-Win64-Shipping.exe' -print -quit)
+if [ -z "$exe" ]; then
+    echo "votv-os-launch-game: VotV-Win64-Shipping.exe not found under $GAME_DIR" >&2
+    command -v kdialog >/dev/null && kdialog --error "Voices of the Void is not installed in $GAME_DIR.\nRun: sudo votv-os-install-game /path/to/votv-0.9.0n.zip"
+    exit 127
+fi
+win64=$(dirname "$exe")
+if [ ! -f "$win64/dwmapi.dll" ] || [ ! -f "$win64/UE4SS.dll" ]; then
+    echo "votv-os-launch-game: shimloader is missing from $win64" >&2
+    exit 126
+fi
+
+# Invisible engine settings (see perf.lua for the runtime part).
+localappdata=$(lsiw config get --linux LOCALAPPDATA 2>/dev/null || true)
+[ -n "$localappdata" ] && "$LIB/votv-os-engine-ini" "$localappdata/VotV/Saved/Config/WindowsNoEditor/Engine.ini" || true
+
+VOTV_OS_RUNTIME=$(win "$RT")
+VOTV_OS_USERCFG=$(win "${XDG_CONFIG_HOME:-$HOME/.config}/totv/votv.json")
+export VOTV_OS_RUNTIME VOTV_OS_USERCFG
+export VOTV_OS_SYSCFG='C:\etc\totv\votv.json'
+export VOTV_OS_USERCONF='C:\etc\totv\user.conf'
+export WINEDLLOVERRIDES="dwmapi=n,b${WINEDLLOVERRIDES:+;$WINEDLLOVERRIDES}"
+export WINEFSYNC=1 WINEESYNC=1
+export DXVK_CONFIG_FILE="$LIB/dxvk.conf"
+export DXVK_STATE_CACHE_PATH="${XDG_CACHE_HOME:-$HOME/.cache}/votv-os/dxvk"
+export __GL_SHADER_DISK_CACHE_SIZE=2147483648 MESA_SHADER_CACHE_MAX_SIZE=2G
+mkdir -p "$DXVK_STATE_CACHE_PATH"
+
+engine="${VOTV_ENGINE:-}"
+if [ -z "$engine" ]; then
+    if lsiw runners 2>/dev/null | grep -qi proton; then engine=proton; else engine=wine; fi
+fi
+
+args=(--mod-dir "$(win "$LIB/mods")" --pak-dir "$(win "$LIB/paks")" --cfg-dir "$(win "$LIB/cfg")")
+runner=()
+command -v gamemoderun >/dev/null && runner=(gamemoderun)
+
+cd "$win64" || exit 1
+exec "${runner[@]}" lsiw run -e "$engine" "$exe" "${args[@]}" "$@"

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=VotV PC
+GenericName=Station PC relay
+Comment=The station's own PC from Voices of the Void: email, store, upgrades, cameras, drives and signals
+Exec=votv-pc
+Icon=computer
+Categories=Game;
+StartupWMClass=votv-pc

@@ -1,0 +1,14 @@
+{
+    "KPlugin": {
+        "Id": "votv-os-wm",
+        "Name": "TotV OS window placement",
+        "Description": "Places Voices of the Void, the in-game PC desktop and the second-screen inventory for TotV OS.",
+        "Authors": [{ "Name": "TotV" }],
+        "License": "MIT",
+        "Version": "1.0.0",
+        "EnabledByDefault": true
+    },
+    "X-Plasma-API": "declarativescript",
+    "X-Plasma-MainScript": "ui/main.qml",
+    "KPackageStructure": "KWin/Script"
+}

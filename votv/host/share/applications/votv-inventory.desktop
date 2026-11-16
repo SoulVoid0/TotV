@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=VotV Inventory
+Comment=The Voices of the Void inventory on a second monitor
+Exec=votv-inventory
+Icon=package
+NoDisplay=true
+StartupWMClass=votv-inventory
