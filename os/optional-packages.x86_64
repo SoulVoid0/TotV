@@ -1,0 +1,3 @@
+# Packages the installer offers as options (bundled when available).
+# Format: <option-name> <package> [<package>...]
+wine wine

@@ -1,0 +1,11 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = filesystem
+Target = totv-base
+
+[Action]
+Description = Applying TotV branding to /etc/os-release...
+When = PostTransaction
+Exec = /usr/lib/totv/totv-apply-branding

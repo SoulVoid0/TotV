@@ -1,0 +1,89 @@
+name: Build TotV OS
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: ['os/**', 'votv/host/**', '.github/workflows/build-os.yml']
+  pull_request:
+    paths: ['os/**', 'votv/host/**', '.github/workflows/build-os.yml']
+  workflow_dispatch:
+    inputs:
+      online:
+        description: 'Online installer (smaller ISO, packages downloaded at install time)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  iso:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: archlinux:latest
+      options: --privileged
+    steps:
+      - name: Install build tools
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Syu --noconfirm --needed archiso base-devel git
+      - uses: actions/checkout@v4
+      - name: Build packages and ISO
+        run: |
+          args=(--out out --work /tmp/totv-build)
+          [[ "${{ inputs.online }}" == "true" ]] && args+=(--online)
+          bash os/build.sh "${args[@]}"
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: totv-iso
+          path: |
+            out/*.iso
+            out/SHA256SUMS
+          compression-level: 0
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: totv-repo
+          path: out/repo/
+          retention-days: 14
+      # A tag (v0.1.0, ...) publishes the ISO and the pacman repository; the
+      # installed systems' [totv] repository is .../releases/latest/download.
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/*.iso
+            out/SHA256SUMS
+            out/repo/*
+
+  # Boots the ISO in QEMU, installs TotV unattended onto a virtual disk, and
+  # boots the result with BIOS and UEFI (os/tests/vm-install.sh).
+  vm-test:
+    needs: iso
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: totv-iso
+          path: out
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install QEMU
+        run: sudo apt-get update -q && sudo apt-get install -y -q qemu-system-x86 qemu-utils ovmf libarchive-tools
+      - name: Install and boot TotV in a VM
+        run: bash os/tests/vm-install.sh out/totv-*-x86_64.iso vm-test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vm-test-logs
+          path: vm-test/*.log

@@ -1,0 +1,34 @@
+#!/bin/sh
+# totv-config: read the settings the TotV installer chose.
+#
+#   totv-config username       the user created at install (also the
+#                              Voices of the Void save name)
+#   totv-config get KEY        one value from /etc/totv/totv.conf or
+#                              /etc/totv/user.conf (e.g. TOTV_VERSION)
+#   totv-config show           every value
+#
+# The files are plain KEY=value lines, also readable with ". FILE".
+set -eu
+files="/etc/totv/totv.conf /etc/totv/user.conf"
+
+get() {
+    for f in $files; do
+        [ -r "$f" ] || continue
+        v=$(sed -n "s/^$1=//p" "$f" | tail -n 1)
+        if [ -n "$v" ]; then
+            # Values are written unquoted or in single quotes.
+            v=${v#\'}; v=${v%\'}
+            printf '%s\n' "$v"
+            return 0
+        fi
+    done
+    return 1
+}
+
+case "${1:-show}" in
+    username) get USERNAME ;;
+    get) [ $# -eq 2 ] || { echo "usage: totv-config get KEY" >&2; exit 2; }; get "$2" ;;
+    show) for f in $files; do [ -r "$f" ] && grep -E '^[A-Z_]+=' "$f"; done; true ;;
+    -h|--help) sed -n '2,11s/^# \{0,1\}//p' "$0" ;;
+    *) echo "totv-config: unknown command '$1' (try --help)" >&2; exit 2 ;;
+esac

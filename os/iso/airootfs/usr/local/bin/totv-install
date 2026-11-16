@@ -1,0 +1,536 @@
+#!/usr/bin/env bash
+# totv-install: set up TotV and install it on a disk (an internal disk or a
+# USB stick), from the TotV installer live system.
+#
+#   totv-install                   interactive (dialog)
+#   totv-install --answers FILE    unattended; FILE holds KEY=value lines:
+#       DISK=/dev/sdX  HOSTNAME=totv  USERNAME=name  USER_PASSWORD=...
+#       ROOT_PASSWORD=... (empty: root locked, use sudo)
+#       TIMEZONE=UTC  LOCALE=en_US.UTF-8  KEYMAP=us  AUTOLOGIN=yes
+#       OPTIONS="wine"  GAME_ARCHIVE=/path (optional)  CONFIRM_WIPE=yes
+#       REBOOT=no  KERNEL_CMDLINE="console=ttyS0" (extra kernel parameters)
+#
+# What it does: one GPT disk layout that boots on BIOS and UEFI computers
+# (1 MiB BIOS boot, 1 GiB EFI system partition mounted at /boot, ext4 root),
+# the packages of /etc/totv/target-packages (from the installer's own
+# repository when it holds everything, otherwise from the Arch mirrors), the
+# user, locale and clock, GRUB as a removable-media bootloader (so the disk
+# also boots on other computers), and /etc/totv/{totv,user}.conf.
+# Extensions in /opt/totv/hooks/<name>/install.sh run at the end.
+#
+# SPDX-License-Identifier: MIT
+set -Eeuo pipefail
+
+readonly TARGET=/mnt
+readonly REPO=/opt/totv/repo
+readonly HOOKS=/opt/totv/hooks
+readonly CONF=/etc/totv
+readonly LOG=/var/log/totv-install.log
+readonly MIN_DISK_BYTES=$((8 * 1024 * 1024 * 1024))
+TOTV_VERSION=unknown
+[[ -r /etc/totv-live-release ]] && . /etc/totv-live-release
+readonly TOTV_VERSION
+readonly TITLE="TotV ${TOTV_VERSION} installer"
+
+DISK='' HOSTNAME_='' USERNAME='' USER_PASSWORD='' ROOT_PASSWORD=''
+TIMEZONE=UTC LOCALE=en_US.UTF-8 KEYMAP=us AUTOLOGIN=yes OPTIONS='wine'
+GAME_ARCHIVE='' CONFIRM_WIPE='' REBOOT='' KERNEL_CMDLINE='' OFFLINE=0 INTERACTIVE=1
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+log() { printf '[%(%H:%M:%S)T] %s\n' -1 "$*" >>"$LOG"; }
+die() {
+    log "ERROR: $*"
+    if ((INTERACTIVE)); then
+        dialog --backtitle "$TITLE" --title "Installation failed" \
+            --msgbox "$*\n\nThe full log is in $LOG." 12 70 || true
+        clear
+    fi
+    echo "totv-install: $*" >&2
+    exit 1
+}
+trap 'die "command failed (line $LINENO): $BASH_COMMAND"' ERR
+
+# dialog writes the answer to stderr; this returns it on stdout.
+ask() { dialog --backtitle "$TITLE" "$@" 3>&1 1>&2 2>&3; }
+
+# Partition N of DISK: /dev/sda3, /dev/nvme0n1p3, /dev/mmcblk0p3.
+part() { if [[ $1 =~ [0-9]$ ]]; then echo "${1}p$2"; else echo "$1$2"; fi; }
+
+# Runs a step, showing it in a progress box when interactive.
+STEP_NO=0 STEP_TOTAL=12
+step() {
+    local msg=$1; shift
+    STEP_NO=$((STEP_NO + 1))
+    log "== $msg"
+    if ((INTERACTIVE)); then
+        dialog --backtitle "$TITLE" --title "Installing" \
+            --gauge "$msg" 8 70 $((STEP_NO * 100 / STEP_TOTAL)) </dev/null || true
+    else
+        echo ":: [$STEP_NO/$STEP_TOTAL] $msg"
+    fi
+    "$@" >>"$LOG" 2>&1
+}
+
+valid_username() {
+    [[ $1 =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || return 1
+    case $1 in
+        root|bin|daemon|mail|ftp|http|nobody|dbus|polkitd|rtkit|uuidd|git|alpm|\
+        systemd-*|avahi|colord|sddm|gdm|lightdm|cdrive|wheel|users|admin|steamuser|public|default)
+            return 1 ;;
+    esac
+}
+valid_hostname() { [[ $1 =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$ ]]; }
+valid_timezone() { [[ -n $1 && $1 != *..* && -f /usr/share/zoneinfo/$1 ]]; }
+valid_locale() { grep -q "^${1//./\\.} " /usr/share/i18n/SUPPORTED 2>/dev/null; }
+valid_keymap() {
+    [[ $1 =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+    [[ -n $(find /usr/share/kbd/keymaps -name "$1.map*" -print -quit 2>/dev/null) ]]
+}
+
+# The disk the live system was started from (never offered as a target).
+live_disk() {
+    local src
+    src=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null) || return 0
+    [[ -b $src ]] || return 0
+    local pk; pk=$(lsblk -no PKNAME "$src" 2>/dev/null) || return 0
+    pk=${pk%%$'\n'*}
+    [[ -n $pk ]] && echo "/dev/$pk"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Questions
+# ---------------------------------------------------------------------------
+pick_disk() {
+    local live items=() name size model tran rm bytes tag
+    live=$(live_disk)
+    while read -r name; do
+        [[ -n $name && $name != "$live" ]] || continue
+        [[ $(lsblk -dno TYPE "$name") == disk ]] || continue
+        bytes=$(lsblk -dbno SIZE "$name")
+        ((bytes >= MIN_DISK_BYTES)) || continue
+        size=$(lsblk -dno SIZE "$name" | tr -d ' ')
+        model=$(lsblk -dno MODEL "$name" | sed 's/ *$//')
+        tran=$(lsblk -dno TRAN "$name" | tr -d ' ')
+        rm=$(lsblk -dno RM "$name" | tr -d ' ')
+        tag=""
+        [[ $tran == usb || $rm == 1 ]] && tag=" [USB/removable]"
+        items+=("$name" "$size ${model:-disk}$tag")
+    done < <(lsblk -dpno NAME -e 7,11)
+    ((${#items[@]})) || die "No disk of at least 8 GiB was found (the installer's own USB stick is not offered). Plug in the USB stick or disk to install TotV on and start the installer again (type: totv-install)."
+    DISK=$(ask --title "Where to install TotV" --menu \
+        "Choose the disk to install TotV on. EVERYTHING on it will be erased.\nA USB stick works: TotV will boot from it on any computer." \
+        18 76 8 "${items[@]}") || exit 0
+}
+
+ask_username() {
+    while :; do
+        USERNAME=$(ask --title "Your user" --inputbox \
+            "Choose your username.\n\nIt is also the name of your Voices of the Void save.\nLowercase letters, digits, '-' and '_', starting with a letter; at most 32 characters." \
+            14 70 "$USERNAME") || exit 0
+        valid_username "$USERNAME" && return
+        dialog --backtitle "$TITLE" --msgbox "'$USERNAME' cannot be used as a username." 7 60
+    done
+}
+
+ask_password() {   # $1 = label, result in REPLY_PW; empty allowed when $2=empty-ok
+    local a b
+    while :; do
+        a=$(ask --insecure --title "$1" --passwordbox "Password for $1:${2:+\n(leave empty to lock the root account and use sudo)}" 10 64) || exit 0
+        if [[ -z $a ]]; then
+            [[ ${2:-} == empty-ok ]] && { REPLY_PW=''; return; }
+            dialog --backtitle "$TITLE" --msgbox "The password cannot be empty." 7 50; continue
+        fi
+        b=$(ask --insecure --title "$1" --passwordbox "Type the password for $1 again:" 10 64) || exit 0
+        [[ $a == "$b" ]] && { REPLY_PW=$a; return; }
+        dialog --backtitle "$TITLE" --msgbox "The passwords do not match." 7 50
+    done
+}
+
+ask_hostname() {
+    while :; do
+        HOSTNAME_=$(ask --title "Computer name" --inputbox \
+            "Name of this computer on the network:" 9 60 "${HOSTNAME_:-totv}") || exit 0
+        valid_hostname "$HOSTNAME_" && return
+        dialog --backtitle "$TITLE" --msgbox "Use letters, digits and '-' only." 7 50
+    done
+}
+
+ask_timezone() {
+    local regions=() r city cities=() c
+    while read -r r; do regions+=("$r" ""); done < <(
+        find /usr/share/zoneinfo -mindepth 1 -maxdepth 1 -type d -printf '%f\n' |
+            grep -Ev '^(posix|right|Etc|SystemV|US|Brazil|Canada|Chile|Mexico)$' | sort)
+    r=$(ask --title "Time zone" --menu "Region (choose UTC for none):" 20 50 12 UTC "" "${regions[@]}") || exit 0
+    if [[ $r == UTC ]]; then TIMEZONE=UTC; return; fi
+    while read -r c; do cities+=("$c" ""); done < <(
+        cd "/usr/share/zoneinfo/$r" && find . -type f -printf '%P\n' | sort)
+    city=$(ask --title "Time zone" --menu "City in $r:" 22 50 15 "${cities[@]}") || exit 0
+    TIMEZONE="$r/$city"
+}
+
+ask_locale() {
+    local common=(en_US.UTF-8 en_GB.UTF-8 de_DE.UTF-8 fr_FR.UTF-8 es_ES.UTF-8 it_IT.UTF-8
+                  pt_BR.UTF-8 nl_NL.UTF-8 pl_PL.UTF-8 ru_RU.UTF-8 sv_SE.UTF-8 ja_JP.UTF-8)
+    local items=() l
+    for l in "${common[@]}"; do items+=("$l" ""); done
+    items+=(other "type another")
+    LOCALE=$(ask --title "Language" --default-item "$LOCALE" --menu "System language (locale):" 20 50 13 "${items[@]}") || exit 0
+    if [[ $LOCALE == other ]]; then
+        while :; do
+            LOCALE=$(ask --inputbox "Locale (as in /usr/share/i18n/SUPPORTED, e.g. fi_FI.UTF-8):" 9 64 "en_US.UTF-8") || exit 0
+            valid_locale "$LOCALE" && break
+        done
+    fi
+}
+
+ask_keymap() {
+    while :; do
+        KEYMAP=$(ask --title "Keyboard" --inputbox \
+            "Console keyboard layout (us, uk, de-latin1, fr, es, it, sv-latin1, ...):" 9 64 "$KEYMAP") || exit 0
+        valid_keymap "$KEYMAP" && { loadkeys "$KEYMAP" 2>/dev/null || true; return; }
+        dialog --backtitle "$TITLE" --msgbox "Unknown keyboard layout '$KEYMAP'." 7 50
+    done
+}
+
+ask_options() {
+    local items=() name pkgs on
+    while read -r name pkgs; do
+        [[ -z $name || $name == \#* ]] && continue
+        on=off; [[ " $OPTIONS " == *" $name "* ]] && on=on
+        items+=("$name" "$pkgs" "$on")
+    done <"$CONF/optional-packages"
+    items+=(autologin "start your session on boot without a password" "$([[ $AUTOLOGIN == yes ]] && echo on || echo off)")
+    local sel
+    sel=$(ask --title "Options" --separate-output --checklist \
+        "Optional parts (space toggles).\nwine: LSIW's fallback for Windows programs its own engine cannot run yet." \
+        16 76 6 "${items[@]}") || exit 0
+    OPTIONS='' AUTOLOGIN=no
+    local s
+    while read -r s; do
+        [[ -z $s ]] && continue
+        if [[ $s == autologin ]]; then AUTOLOGIN=yes; else OPTIONS+="$s "; fi
+    done <<<"$sel"
+    OPTIONS=${OPTIONS% }
+}
+
+ask_game_archive() {
+    compgen -G "$HOOKS/*/install.sh" >/dev/null || return 0
+    dialog --backtitle "$TITLE" --title "Voices of the Void" --yesno \
+        "Do you have Voices of the Void 0.9.0n (a .zip/.7z archive or its folder) on a disk or USB stick?\n\nThe game cannot be shipped with TotV. If you choose Yes, plug that drive in now; the installer copies the game for you. You can also add it later." \
+        12 72 || return 0
+    local d live
+    live=$(live_disk)
+    mkdir -p /run/totv-media
+    while read -r d; do
+        [[ -n $live && $d == "$live"* ]] && continue
+        [[ -n $DISK && $d == "$DISK"* ]] && continue
+        local mp="/run/totv-media/${d##*/}"
+        mkdir -p "$mp"
+        mountpoint -q "$mp" || mount -o ro "$d" "$mp" 2>/dev/null || rmdir "$mp" 2>/dev/null || true
+    done < <(lsblk -pnlo NAME,TYPE,FSTYPE | awk '$2=="part" && $3!="" {print $1}')
+    GAME_ARCHIVE=$(ask --title "Voices of the Void" --fselect /run/totv-media/ 14 72) || { GAME_ARCHIVE=''; return 0; }
+    [[ -e $GAME_ARCHIVE ]] || GAME_ARCHIVE=''
+}
+
+confirm() {
+    local size model
+    size=$(lsblk -dno SIZE "$DISK"); model=$(lsblk -dno MODEL "$DISK")
+    dialog --backtitle "$TITLE" --title "Ready to install" --defaultno --yesno \
+"Disk:        $DISK ($size ${model})
+             ALL DATA ON THIS DISK WILL BE ERASED
+Username:    $USERNAME  (also your Voices of the Void save)
+Computer:    $HOSTNAME_
+Time zone:   $TIMEZONE
+Language:    $LOCALE    Keyboard: $KEYMAP
+Autologin:   $AUTOLOGIN
+Options:     ${OPTIONS:-none}
+Game:        ${GAME_ARCHIVE:-not now}
+Packages:    $([[ $OFFLINE == 1 ]] && echo 'from this installer (no network needed)' || echo 'downloaded from the Arch Linux mirrors')
+
+Erase $DISK and install TotV?" 20 76
+}
+
+# ---------------------------------------------------------------------------
+# Installation
+# ---------------------------------------------------------------------------
+pick_sources() {
+    if [[ -e $REPO/.complete ]]; then
+        OFFLINE=1
+    else
+        OFFLINE=0
+        if ! curl -fsS --max-time 10 -o /dev/null https://archlinux.org/; then
+            local msg="This installer does not hold every package, and there is no internet connection. Connect to the internet first (Ethernet works by itself; for Wi-Fi run: iwctl), then start the installer again (type: totv-install)."
+            die "$msg"
+        fi
+    fi
+    PACMAN_CONF="$CONF/pacman-$([[ $OFFLINE == 1 ]] && echo offline || echo online).conf"
+}
+
+target_packages() {
+    sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$CONF/target-packages"
+    local name pkgs opt
+    while read -r name pkgs; do
+        [[ -z $name || $name == \#* ]] && continue
+        for opt in $OPTIONS; do [[ $opt == "$name" ]] && tr ' ' '\n' <<<"$pkgs"; done
+    done <"$CONF/optional-packages"
+    local f
+    for f in "$HOOKS"/*/packages.x86_64; do
+        [[ -r $f ]] && sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$f"
+    done
+    return 0
+}
+
+do_cleanup_target() {
+    swapoff -a 2>/dev/null || true
+    umount -R "$TARGET" 2>/dev/null || true
+    local p
+    for p in $(lsblk -lnpo NAME "$DISK" | tail -n +2); do umount "$p" 2>/dev/null || true; done
+}
+
+do_partition() {
+    wipefs -af "$DISK"
+    sgdisk --zap-all "$DISK"
+    sgdisk -n1:0:+1M   -t1:ef02 -c1:"BIOS boot" \
+           -n2:0:+1G   -t2:ef00 -c2:"TOTV_EFI" \
+           -n3:0:0     -t3:8304 -c3:"TOTV_ROOT" "$DISK"
+    partprobe "$DISK" || true
+    udevadm settle
+    sleep 1
+}
+
+do_format() {
+    mkfs.fat -F 32 -n TOTV_EFI "$(part "$DISK" 2)"
+    mkfs.ext4 -F -L TOTV_ROOT "$(part "$DISK" 3)"
+}
+
+do_mount() {
+    mount "$(part "$DISK" 3)" "$TARGET"
+    mount --mkdir -o fmask=0077,dmask=0077 "$(part "$DISK" 2)" "$TARGET/boot"
+}
+
+do_pacstrap() {
+    local pkgs; mapfile -t pkgs < <(target_packages | sort -u)
+    log "packages: ${pkgs[*]}"
+    pacstrap -C "$PACMAN_CONF" -K "$TARGET" "${pkgs[@]}"
+}
+
+in_target() { arch-chroot "$TARGET" "$@"; }
+
+do_system_config() {
+    genfstab -U "$TARGET" >>"$TARGET/etc/fstab"
+    ln -sf "/usr/share/zoneinfo/$TIMEZONE" "$TARGET/etc/localtime"
+    in_target hwclock --systohc || true
+    sed -i "s/^#\(${LOCALE//./\\.} \)/\1/" "$TARGET/etc/locale.gen"
+    grep -q "^en_US\.UTF-8 " "$TARGET/etc/locale.gen" || sed -i 's/^#\(en_US\.UTF-8 \)/\1/' "$TARGET/etc/locale.gen"
+    in_target locale-gen
+    echo "LANG=$LOCALE" >"$TARGET/etc/locale.conf"
+    echo "KEYMAP=$KEYMAP" >"$TARGET/etc/vconsole.conf"
+    echo "$HOSTNAME_" >"$TARGET/etc/hostname"
+    cat >"$TARGET/etc/hosts" <<EOF
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $HOSTNAME_.localdomain $HOSTNAME_
+EOF
+    # The installed system's pacman: Arch's repositories, multilib (games,
+    # Wine) and TotV's own repository (lsiw, totv-base) on GitHub.
+    if ! grep -q '^\[multilib\]' "$TARGET/etc/pacman.conf"; then
+        printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >>"$TARGET/etc/pacman.conf"
+    fi
+    if ! grep -q '^\[totv\]' "$TARGET/etc/pacman.conf"; then
+        cat >>"$TARGET/etc/pacman.conf" <<'EOF'
+
+# TotV's own packages (lsiw, totv-base, ...), built by the TotV repository's CI.
+[totv]
+SigLevel = Optional TrustAll
+Server = https://github.com/SoulVoid0/TotV/releases/latest/download
+EOF
+    fi
+    in_target systemctl enable NetworkManager.service systemd-timesyncd.service
+}
+
+do_users() {
+    in_target systemd-sysusers
+    in_target systemd-tmpfiles --create /usr/lib/tmpfiles.d/totv.conf
+    in_target useradd -m -G wheel,cdrive -s /bin/bash "$USERNAME"
+    printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD" | in_target chpasswd
+    if [[ -n $ROOT_PASSWORD ]]; then
+        printf 'root:%s\n' "$ROOT_PASSWORD" | in_target chpasswd
+    else
+        in_target passwd -l root
+    fi
+    # C:\users\<name> is the user's profile, for every LSIW engine.
+    ln -sfn "/home/$USERNAME" "$TARGET/users/$USERNAME"
+    ln -sfn "/home/$USERNAME" "$TARGET/users/steamuser"
+    in_target chown -h "$USERNAME:cdrive" "/users/$USERNAME" "/users/steamuser"
+    if [[ $AUTOLOGIN == yes ]]; then
+        mkdir -p "$TARGET/etc/systemd/system/getty@tty1.service.d"
+        cat >"$TARGET/etc/systemd/system/getty@tty1.service.d/autologin.conf" <<EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty -o '-p -f -- \\\\u' --noclear --autologin $USERNAME %I \$TERM
+EOF
+    fi
+}
+
+do_totv_config() {
+    mkdir -p "$TARGET$CONF/session.d"
+    cat >"$TARGET$CONF/totv.conf" <<EOF
+# Written by the TotV installer. Read with: totv-config get KEY
+TOTV_VERSION=$TOTV_VERSION
+TOTV_INSTALL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+HOSTNAME=$HOSTNAME_
+AUTOLOGIN=$AUTOLOGIN
+OPTIONS='$OPTIONS'
+OFFLINE=$OFFLINE
+EOF
+    cat >"$TARGET$CONF/user.conf" <<EOF
+# The user chosen in the TotV installer. Read with: totv-config username
+# SAVE_NAME is the name of the user's Voices of the Void save.
+USERNAME=$USERNAME
+SAVE_NAME=$USERNAME
+EOF
+    chmod 0644 "$TARGET$CONF/totv.conf" "$TARGET$CONF/user.conf"
+}
+
+do_bootloader() {
+    # The TotV initramfs drop-in keeps every driver (no autodetect).
+    in_target mkinitcpio -P
+    sed -i -e 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="TotV"/' \
+           -e 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=2/' "$TARGET/etc/default/grub"
+    if [[ -n $KERNEL_CMDLINE ]]; then
+        [[ $KERNEL_CMDLINE =~ ^[A-Za-z0-9_.,=:/\ -]+$ ]] || die "KERNEL_CMDLINE has characters that are not allowed"
+        sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"|GRUB_CMDLINE_LINUX_DEFAULT=\"\1 $KERNEL_CMDLINE\"|" "$TARGET/etc/default/grub"
+    fi
+    in_target grub-install --target=i386-pc --recheck "$DISK"
+    # --removable: \EFI\BOOT\BOOTX64.EFI, found by every UEFI firmware
+    # without a boot entry, so the disk boots on other computers too.
+    in_target grub-install --target=x86_64-efi --efi-directory=/boot --removable --recheck
+    in_target grub-mkconfig -o /boot/grub/grub.cfg
+}
+
+# Extensions (e.g. the Voices of the Void integration) install themselves
+# here. Each gets the target root and the installer's choices; the target's
+# pacman uses the installer's package sources while they run.
+do_hooks() {
+    compgen -G "$HOOKS/*/install.sh" >/dev/null || return 0
+    mkdir -p "$TARGET$REPO"
+    mount --bind "$REPO" "$TARGET$REPO"
+    cp "$TARGET/etc/pacman.conf" "$TARGET/etc/pacman.conf.totv-install"
+    cp "$PACMAN_CONF" "$TARGET/etc/pacman.conf"
+    local h rc=0
+    for h in "$HOOKS"/*/install.sh; do
+        log "hook: $h"
+        TOTV_ROOT="$TARGET" TOTV_USERNAME="$USERNAME" TOTV_OFFLINE="$OFFLINE" \
+        TOTV_GAME_ARCHIVE="$GAME_ARCHIVE" TOTV_OPTIONS="$OPTIONS" \
+            bash "$h" "$TARGET" || { rc=$?; log "hook $h failed ($rc)"; break; }
+    done
+    mv "$TARGET/etc/pacman.conf.totv-install" "$TARGET/etc/pacman.conf"
+    umount "$TARGET$REPO"
+    rmdir -p "$TARGET$REPO" 2>/dev/null || true
+    return "$rc"
+}
+
+do_finish() {
+    cp "$LOG" "$TARGET/var/log/totv-install.log" 2>/dev/null || true
+    sync
+    umount -R "$TARGET"
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+load_answers() {
+    local f=$1 k v
+    [[ -r $f ]] || die "cannot read $f"
+    while IFS='=' read -r k v; do
+        [[ -z $k || $k == \#* ]] && continue
+        v=${v#\"}; v=${v%\"}; v=${v#\'}; v=${v%\'}
+        case $k in
+            DISK) DISK=$v ;; HOSTNAME) HOSTNAME_=$v ;; USERNAME) USERNAME=$v ;;
+            USER_PASSWORD) USER_PASSWORD=$v ;; ROOT_PASSWORD) ROOT_PASSWORD=$v ;;
+            TIMEZONE) TIMEZONE=$v ;; LOCALE) LOCALE=$v ;; KEYMAP) KEYMAP=$v ;;
+            AUTOLOGIN) AUTOLOGIN=$v ;; OPTIONS) OPTIONS=$v ;; GAME_ARCHIVE) GAME_ARCHIVE=$v ;;
+            CONFIRM_WIPE) CONFIRM_WIPE=$v ;; REBOOT) REBOOT=$v ;; KERNEL_CMDLINE) KERNEL_CMDLINE=$v ;;
+            *) die "unknown key '$k' in $f" ;;
+        esac
+    done <"$f"
+    [[ -b $DISK ]] || die "DISK=$DISK is not a block device"
+    [[ $DISK != "$(live_disk)" ]] || die "DISK=$DISK is the installer's own disk"
+    valid_username "$USERNAME" || die "USERNAME='$USERNAME' is not a valid username"
+    [[ -n $USER_PASSWORD ]] || die "USER_PASSWORD is empty"
+    valid_hostname "${HOSTNAME_:=totv}" || die "HOSTNAME='$HOSTNAME_' is not valid"
+    valid_timezone "$TIMEZONE" || die "TIMEZONE='$TIMEZONE' is not a time zone"
+    valid_locale "$LOCALE" || die "LOCALE='$LOCALE' is not a supported locale"
+    valid_keymap "$KEYMAP" || die "KEYMAP='$KEYMAP' is not a keyboard layout"
+    [[ $AUTOLOGIN == yes || $AUTOLOGIN == no ]] || die "AUTOLOGIN must be yes or no"
+    [[ $CONFIRM_WIPE == yes ]] || die "set CONFIRM_WIPE=yes to erase $DISK"
+}
+
+main() {
+    case ${1:-} in
+        -h|--help) sed -n '2,21s/^# \{0,1\}//p' "$0"; exit 0 ;;
+        --answers) [[ $# -eq 2 ]] || die "usage: totv-install --answers FILE"; INTERACTIVE=0 ;;
+        '') ;;
+        *) echo "usage: totv-install [--answers FILE]" >&2; exit 2 ;;
+    esac
+    ((EUID == 0)) || { echo "totv-install must run as root" >&2; exit 1; }
+    : >"$LOG"
+    log "TotV installer $TOTV_VERSION"
+
+    if ((INTERACTIVE)); then
+        command -v dialog >/dev/null || die "dialog is missing"
+        dialog --backtitle "$TITLE" --title "Welcome" --yes-label "Install" --no-label "Shell" --yesno \
+"Welcome to TotV, an operating system based on Arch Linux.
+
+This installer sets TotV up (your username, password, language and time
+zone) and installs it on a disk or USB stick of your choice.
+
+Choose Shell to leave the installer; type totv-install to start it again." 14 76 || { clear; exit 0; }
+        pick_sources
+        ask_keymap
+        pick_disk
+        ask_username
+        ask_password "$USERNAME"; USER_PASSWORD=$REPLY_PW
+        ask_password root empty-ok; ROOT_PASSWORD=$REPLY_PW
+        ask_hostname
+        ask_timezone
+        ask_locale
+        ask_options
+        ask_game_archive
+        confirm || { clear; echo "Nothing was changed. Type totv-install to start again."; exit 0; }
+    else
+        load_answers "$2"
+        pick_sources
+    fi
+    log "disk=$DISK user=$USERNAME host=$HOSTNAME_ tz=$TIMEZONE locale=$LOCALE keymap=$KEYMAP autologin=$AUTOLOGIN options='$OPTIONS' offline=$OFFLINE"
+
+    step "Preparing $DISK" do_cleanup_target
+    step "Partitioning $DISK" do_partition
+    step "Formatting" do_format
+    step "Mounting" do_mount
+    step "Installing packages (this takes a while)" do_pacstrap
+    step "Configuring the system" do_system_config
+    step "Creating user $USERNAME" do_users
+    step "Writing /etc/totv" do_totv_config
+    step "Installing the bootloader" do_bootloader
+    step "Installing extensions" do_hooks
+    step "Finishing" do_finish
+    STEP_NO=$((STEP_TOTAL - 1))
+    step "Done" true
+
+    if ((INTERACTIVE)); then
+        if dialog --backtitle "$TITLE" --title "TotV is installed" --yes-label "Reboot" --no-label "Shell" --yesno \
+            "TotV is installed on $DISK.\n\nRemove the installer USB stick and reboot. Log in as $USERNAME." 10 64; then
+            reboot
+        fi
+        clear
+    else
+        echo "TotV is installed on $DISK."
+        if [[ $REBOOT == yes ]]; then reboot; fi
+    fi
+}
+
+main "$@"

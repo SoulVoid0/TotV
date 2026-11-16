@@ -1,0 +1,80 @@
+From d2508eaf92a968566d7e67af5cf82a8119a8cc65 Mon Sep 17 00:00:00 2001
+From: TotV <totv@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 22:13:24 +0000
+Subject: [PATCH] Support the Linux root as the C: drive
+
+---
+ src/common/paths.c  | 18 +++++++++++++++---
+ src/common/prefix.c |  7 +++++++
+ 2 files changed, 22 insertions(+), 3 deletions(-)
+
+diff --git a/src/common/paths.c b/src/common/paths.c
+index 4c7824f..ba3300e 100644
+--- a/src/common/paths.c
++++ b/src/common/paths.c
+@@ -274,6 +274,13 @@ static void migrate_old_defaults(int verbose)
+ 
+ static void migrate_old_root(int verbose);
+ 
++/* "<root>/<name>", without a doubled slash when the C: drive is the Linux
++ * root itself ("/", as on TotV). */
++static char *root_child(const char *root, const char *name)
++{
++    return lsiw_strdup_printf("%s/%s", strcmp(root, "/") ? root : "", name);
++}
++
+ int lsiw_sync_root(int verbose)
+ {
+     migrate_old_defaults(verbose);
+@@ -306,14 +313,19 @@ int lsiw_sync_root(int verbose)
+         if (!t[i].anchor) continue;
+         const char *loc = lsiw_var_linux(t[i].name);
+         if (!loc) continue;
+-        char *link = lsiw_strdup_printf("%s/%s", root, t[i].anchor);
++        char *link = root_child(root, t[i].anchor);
+         if (strcmp(link, loc)) ensure_symlink(link, loc, verbose);
+         else lsiw_mkdirs(loc, 0755);
+         free(link);
+     }
+ 
++    /* When the C: drive is the Linux root, every top-level Linux directory
++     * already is C:\<name>: there is nothing to link, and linking would
++     * replace /bin, /lib, ... (links themselves) with links to themselves. */
++    int is_root = !strcmp(root, "/");
++
+     /* One entry per top-level Linux directory. */
+-    DIR *d = opendir("/");
++    DIR *d = is_root ? NULL : opendir("/");
+     if (d) {
+         struct dirent *de;
+         while ((de = readdir(d))) {
+@@ -329,7 +341,7 @@ int lsiw_sync_root(int verbose)
+     }
+ 
+     /* Remove links for top-level directories that are gone. */
+-    d = opendir(root);
++    d = is_root ? NULL : opendir(root);
+     if (d) {
+         struct dirent *de;
+         while ((de = readdir(d))) {
+diff --git a/src/common/prefix.c b/src/common/prefix.c
+index 555a96c..cdf5b27 100644
+--- a/src/common/prefix.c
++++ b/src/common/prefix.c
+@@ -375,6 +375,13 @@ int lsiw_cdrive_move(const char *path, int folders, int verbose)
+         return -1;
+     }
+     lsiw_cdrive_migrate(verbose);
++    /* The Linux root as C: (TotV) is fixed: moving "/" into a folder, or a
++     * folder's contents into "/", is never what anyone wants. */
++    if (!strcmp(to, "/") || !strcmp(lsiw_root_dir(), "/")) {
++        lsiw_log("C: is the Linux root (/) on this system and cannot be moved\n");
++        free(to);
++        return -1;
++    }
+     char *from = strdup(lsiw_root_dir());
+     char *real_from = realpath(from, NULL);
+     size_t fl = strlen(from), tl = strlen(to);
+-- 
+2.43.0
+

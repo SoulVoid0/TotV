@@ -1,0 +1,6 @@
+TotV installer live system (based on Arch Linux).
+
+  totv-install          set up TotV and install it on a disk or USB stick
+  totv-install --help   unattended installs with an answers file
+  iwctl                 connect to Wi-Fi (only needed if the installer asks)
+

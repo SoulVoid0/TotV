@@ -1,0 +1,25 @@
+# Packages of the installed TotV system (no desktop yet).
+# One per line; '#' starts a comment. build.sh bundles them (and their
+# dependencies) into the installer's offline repository.
+base
+linux
+linux-firmware
+intel-ucode
+amd-ucode
+mkinitcpio
+grub
+efibootmgr
+dosfstools
+e2fsprogs
+networkmanager
+sudo
+nano
+vim
+less
+man-db
+man-pages
+bash-completion
+htop
+# TotV's own packages (built by build.sh)
+lsiw
+totv-base

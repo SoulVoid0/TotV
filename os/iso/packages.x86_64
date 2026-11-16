@@ -1,0 +1,11 @@
+# Added to archiso's releng package list for the TotV installer live system.
+dialog
+arch-install-scripts
+gptfdisk
+dosfstools
+e2fsprogs
+parted
+grub
+efibootmgr
+p7zip
+unzip
