@@ -73,6 +73,7 @@ mapfile -t pkgs < <(list "$top/os/target-packages.x86_64" "$top/votv/host/packag
 pacstrap -C "$conf" -K -c "$root" "${pkgs[@]}"
 
 # The installed system's pacman: Arch, multilib, and [totv] from GitHub releases (updates).
+grep -q '^Architecture' "$root/etc/pacman.conf" || sed -i '/^\[options\]/a Architecture = auto' "$root/etc/pacman.conf"
 grep -q '^\[multilib\]' "$root/etc/pacman.conf" || printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >>"$root/etc/pacman.conf"
 grep -q '^\[totv\]' "$root/etc/pacman.conf" || cat >>"$root/etc/pacman.conf" <<'EOF2'
 
@@ -92,7 +93,9 @@ if [[ -n $game ]]; then
 fi
 fetch=1; ((nogame)) && fetch=0; [[ -n $game ]] && fetch=0
 mount --bind "$root" "$root"   # arch-chroot wants a mount point
+# The TotVOS mod targets 0.9.0n: that build, while itch.io has it (VOTV_VERSION overrides).
 arch-chroot "$root" env VOTV_SKIP_PACKAGES=1 TOTV_OFFLINE=0 VOTV_FETCH=$fetch "${gargs[@]}" \
+    VOTV_VERSION="${VOTV_VERSION:-0.9.0n}" \
     ${VOTV_URL:+VOTV_URL="$VOTV_URL"} ${ITCH_API_KEY:+ITCH_API_KEY="$ITCH_API_KEY"} \
     bash /usr/share/votv-os/host/install.sh /
 rm -rf "$root/var/tmp/totv-game"

@@ -12,6 +12,7 @@
 Downloads use itch.io's own download flow for free games; with ITCH_API_KEY set (an
 itch.io API key) the official API is used instead. VOTV_URL=<url of a zip> skips itch.io.
 """
+import html
 import http.cookiejar
 import json
 import os
@@ -25,7 +26,20 @@ from pathlib import Path
 PAGE = os.environ.get("VOTV_ITCH_PAGE", "https://mrdrnose.itch.io/votv")
 ROOT = Path(os.environ.get("VOTV_ROOT", "/.VotV"))
 UA = "TotV-OS (votv-os-game)"
-VER_RE = re.compile(r"(\d+\.\d+\.\d+[a-z]?)", re.I)
+# Builds are named like "[RECENT] Alpha 0.9.0-n", "votv_0.9.0n.zip", "0.10.0_2 early preview".
+VER_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:[-_ ]?([a-z]|\d+)\b)?", re.I)
+
+
+def find_version(*texts):
+    """The build's version, normalised: 0.9.0-n -> 0.9.0n, 0.10.0_2 -> 0.10.0_2."""
+    for t in texts:
+        m = VER_RE.search(t or "")
+        if m:
+            suffix = m[4] or ""
+            if suffix.isdigit():
+                suffix = "_" + suffix
+            return f"{m[1]}.{m[2]}.{m[3]}{suffix.lower()}"
+    return ""
 
 jar = http.cookiejar.CookieJar()
 opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
@@ -41,10 +55,10 @@ def get(url, data=None, headers=None):
 
 
 def version_key(v):
-    m = re.match(r"(\d+)\.(\d+)\.(\d+)([a-z]?)", v or "", re.I)
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)([a-z]?)(?:_(\d+))?", v or "", re.I)
     if not m:
         return (-1,)
-    return (int(m[1]), int(m[2]), int(m[3]), m[4].lower())
+    return (int(m[1]), int(m[2]), int(m[3]), m[4].lower(), int(m[5] or 0))
 
 
 def uploads():
@@ -60,39 +74,59 @@ def uploads():
             if "windows" not in (u.get("traits") or []) and not u.get("p_windows"):
                 continue
             name = u.get("filename") or u.get("display_name") or ""
-            m = VER_RE.search(name) or VER_RE.search(u.get("display_name") or "")
             uid = u["id"]
-            out.append((m[1] if m else "", name, uid,
+            out.append((find_version(u.get("display_name"), name), name, uid,
                         lambda uid=uid: json.loads(get(f"https://api.itch.io/uploads/{uid}/download", headers=auth)).get("url")
                         or f"https://api.itch.io/uploads/{uid}/download?api_key={key}"))
         return out
     # The page's own flow for free / name-your-own-price games.
     page = get(PAGE).decode("utf-8", "replace")
     csrf = re.search(r'name="csrf_token"\s+value="([^"]+)"', page) or re.search(r'csrf_token"\s*content="([^"]+)"', page)
-    r = json.loads(get(PAGE.rstrip("/") + "/download_url", {"csrf_token": csrf[1] if csrf else ""}))
+    r = json.loads(get(PAGE.rstrip("/") + "/download_url", {"csrf_token": csrf[1] if csrf else ""},
+                       {"Referer": PAGE, "X-Requested-With": "XMLHttpRequest"}))
     dl_page = get(r["url"]).decode("utf-8", "replace")
     dl_key = r["url"].rstrip("/").rsplit("/", 1)[-1]
     csrf2 = re.search(r'name="csrf_token"\s+value="([^"]+)"', dl_page) or re.search(r'csrf_token"\s*content="([^"]+)"', dl_page)
-    for m in re.finditer(r'data-upload_id="(\d+)".*?class="name"[^>]*title="([^"]+)"', dl_page, re.S):
-        uid, name = m[1], m[2]
-        if not name.lower().endswith((".zip", ".7z", ".rar")):
+    # One <div class="upload"> per file: <strong class="name" title="FILE">DISPLAY NAME</strong>,
+    # platform icons, and a download button with data-upload_id.
+    for block in re.split(r'<div[^>]*class="upload"', dl_page)[1:]:
+        uid = re.search(r'data-upload_id="(\d+)"', block)
+        if not uid:
             continue
-        v = VER_RE.search(name)
+        strong = re.search(r'<strong([^>]*)>(.*?)</strong>', block, re.S)
+        attrs = strong[1] if strong else ""
+        title = re.search(r'title="([^"]*)"', attrs)
+        filename = html.unescape(title[1]) if title else ""
+        display = html.unescape(re.sub(r"<[^>]+>", "", strong[2])).strip() if strong else ""
+        if "icon-windows" not in block and not filename.lower().endswith((".zip", ".7z", ".rar")):
+            continue
+        name = filename or display
+        v = find_version(display, filename)
 
-        def fn(uid=uid):
+        def fn(uid=uid[1]):
             q = urllib.parse.urlencode({"source": "game_download", "key": dl_key})
-            d = json.loads(get(f"{PAGE.rstrip('/')}/file/{uid}?{q}", {"csrf_token": csrf2[1] if csrf2 else ""}))
+            d = json.loads(get(f"{PAGE.rstrip('/')}/file/{uid}?{q}", {"csrf_token": csrf2[1] if csrf2 else ""},
+                               {"Referer": r["url"]}))
             return d["url"]
-        out.append((v[1] if v else "", name, uid, fn))
+        out.append((v, name, uid[1], fn))
     return out
 
 
-def latest(version=None):
-    ups = [u for u in uploads() if u[0]]
+def latest(version=None, stable=True):
+    found = uploads()
+    print("builds on itch.io: " + ", ".join(f"{v or '?'} ({n})" for v, n, _u, _f in found), file=sys.stderr)
+    ups = [u for u in found if u[0]]
     if version:
-        ups = [u for u in ups if u[0].lower() == version.lower()]
+        want = find_version(version) or version
+        hit = [u for u in ups if u[0].lower() == want.lower()]
+        if hit:
+            return hit[0]
+        print(f"votv-os-game: build {version} is not on itch.io any more; using the newest", file=sys.stderr)
+    if stable:   # previews ("0.10.0_2 early preview") only when nothing else is there
+        st = [u for u in ups if "_" not in u[0] and "preview" not in u[1].lower()]
+        ups = st or ups
     if not ups:
-        raise SystemExit("votv-os-game: no matching Windows build found on " + PAGE)
+        raise SystemExit("votv-os-game: no Windows build found on " + PAGE)
     return max(ups, key=lambda u: version_key(u[0]))
 
 
@@ -105,8 +139,8 @@ def fetch(dest, version=None):
     else:
         v, name, _uid, fn = latest(version)
         url = fn()
-        if not VER_RE.search(name):
-            name = f"votv-{v}.zip"
+        ext = os.path.splitext(name)[1].lower()
+        name = f"votv-{v}{ext if ext in ('.zip', '.7z', '.rar') else '.zip'}"
     out = dest / name
     print(f"downloading {name} ...", file=sys.stderr)
     subprocess.run(["curl", "-fL", "--retry", "3", "-A", UA, "-o", str(out), url], check=True)
@@ -124,8 +158,8 @@ def install(version=None, root="/"):
     work = Path(root) / ".VotV" / ".download"
     try:
         z = fetch(work, version)
-        v = VER_RE.search(z.name)
-        subprocess.run(["votv-os-install-game", "--root", root] + (["--version", v[1]] if v else []) + [str(z)],
+        v = find_version(z.name)
+        subprocess.run(["votv-os-install-game", "--root", root] + (["--version", v] if v else []) + [str(z)],
                        check=True)
     finally:
         subprocess.run(["rm", "-rf", str(work)])
