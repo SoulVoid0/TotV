@@ -56,9 +56,12 @@ log() { printf '[%(%H:%M:%S)T] %s\n' -1 "$*" >>"$LOG"; }
 die() {
     log "ERROR: $*"
     if ((INTERACTIVE)); then
+        # The end of the log says why; dialog's own screen is the terminal, not the step's log.
+        local tailtxt
+        tailtxt=$(grep -v -e '^progress ' -e '^\[' "$LOG" 2>/dev/null | tail -n 12 | cut -c1-110 | sed 's/\\/\\\\/g')
         dialog --backtitle "$TITLE" --title "Installation failed" \
-            --msgbox "$*\n\nThe full log is in $LOG." 12 70 || true
-        clear
+            --msgbox "$*\n\nLast lines of $LOG:\n\n$tailtxt\n\nAlt+F2 opens a shell (user root, no password)." 24 116 </dev/null >/dev/tty 2>&1 || true
+        clear >/dev/tty 2>&1 || true
     fi
     echo "totv-install: $*" >&2
     exit 1
@@ -505,6 +508,14 @@ do_image() {
     if [[ -b $iso ]]; then mount -o ro "$iso" "$mnt"; else mount -o loop,ro "$iso" "$mnt"; fi
     [[ -f $mnt/totv-system/rootfs.sfs ]] || { umount "$mnt"; release_image; die "$(basename "$iso") is not a TotV system image"; }
     log "manifest: $(cat "$mnt/totv-system/manifest.json" 2>/dev/null)"
+    local need avail
+    need=$(grep -o '"installed_bytes": *[0-9]*' "$mnt/totv-system/manifest.json" 2>/dev/null | grep -o '[0-9]*$' || echo 0)
+    avail=$(df -B1 --output=avail "$TARGET" | tail -n1)
+    log "space: the system needs $(mib "$need") MiB, $(mib "$avail") MiB free on $DISK"
+    if ((need > 0 && avail < need + 1073741824)); then
+        umount "$mnt"; release_image
+        die "$DISK is too small: TotV needs $(( (need + 1073741824) / 1073741824 )) GiB free to unpack, $(( avail / 1073741824 )) GiB are free (the downloaded image itself takes $(( $(size_of "$iso") / 1073741824 )) GiB until it is unpacked). Use a disk of at least 32 GiB."
+    fi
     # Unpacking: unsquashfs -percentage prints one number per line.
     show "Unpacking TotV (the OS, Voices of the Void, r2modman)" 65
     # (Failures are collected with ||, so the installer's ERR trap does not fire mid-way.)
@@ -519,11 +530,19 @@ do_image() {
             esac
         done
     status=$(cat /run/totv-unsquashfs.rc 2>/dev/null || echo 1)
-    if [[ $status != 0 ]]; then
+    # Exit status 2: unsquashfs finished with non-fatal errors (e.g. ACLs the live system
+    # cannot set); the files are there. Only other statuses are failures.
+    if [[ $status == 2 ]]; then
+        log "unsquashfs reported non-fatal errors (status 2); continuing"
+        status=0
+    fi
+    # An unsquashfs without -percentage: unpack again without progress.
+    if [[ $status != 0 ]] && grep -q -i -e 'unrecognised option' -e 'invalid option' <(tail -n 20 "$LOG"); then
         log "unsquashfs -percentage failed ($status); unpacking without progress"
         show "Unpacking TotV (the OS, Voices of the Void, r2modman)\n\nThis takes several minutes." 70
         status=0
         unsquashfs -f -d "$TARGET" "$mnt/totv-system/rootfs.sfs" >>"$LOG" 2>&1 || status=$?
+        [[ $status == 2 ]] && { log "unsquashfs reported non-fatal errors (status 2); continuing"; status=0; }
     fi
     umount "$mnt"
     release_image
