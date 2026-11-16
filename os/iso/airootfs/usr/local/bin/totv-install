@@ -519,9 +519,14 @@ do_image() {
     # Unpacking: unsquashfs -percentage prints one number per line.
     show "Unpacking TotV (the OS, Voices of the Void, r2modman)" 65
     # (Failures are collected with ||, so the installer's ERR trap does not fire mid-way.)
-    local status=0 pct
+    local status=0 pct mem lowmem=()
+    # The live system runs from RAM; on small machines unsquashfs keeps small caches and
+    # one thread, so the kernel does not kill it.
+    mem=$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo)
+    log "available memory: ${mem:-?} MiB"
+    ((${mem:-0} < 3072)) && lowmem=(-da 32 -fr 32 -p 1)
     rm -f /run/totv-unsquashfs.rc
-    { rc=0; unsquashfs -percentage -f -d "$TARGET" "$mnt/totv-system/rootfs.sfs" 2>>"$LOG" || rc=$?; echo "rc=$rc"; } |
+    { rc=0; unsquashfs "${lowmem[@]}" -percentage -f -d "$TARGET" "$mnt/totv-system/rootfs.sfs" 2>>"$LOG" || rc=$?; echo "rc=$rc"; } |
         while read -r pct; do
             case $pct in
                 rc=*) echo "${pct#rc=}" >/run/totv-unsquashfs.rc ;;
@@ -541,12 +546,17 @@ do_image() {
         log "unsquashfs -percentage failed ($status); unpacking without progress"
         show "Unpacking TotV (the OS, Voices of the Void, r2modman)\n\nThis takes several minutes." 70
         status=0
-        unsquashfs -f -d "$TARGET" "$mnt/totv-system/rootfs.sfs" >>"$LOG" 2>&1 || status=$?
+        unsquashfs "${lowmem[@]}" -f -d "$TARGET" "$mnt/totv-system/rootfs.sfs" >>"$LOG" 2>&1 || status=$?
         [[ $status == 2 ]] && { log "unsquashfs reported non-fatal errors (status 2); continuing"; status=0; }
     fi
     umount "$mnt"
     release_image
-    ((status == 0)) || die "unpacking the system image failed (see $LOG)"
+    if ((status != 0)); then
+        if dmesg 2>/dev/null | tail -n 50 | grep -q -i -e 'killed process.*unsquashfs' -e 'out of memory'; then
+            die "unpacking ran out of memory (the installer runs from RAM; ${mem:-?} MiB were free). Give this computer or VM at least 4 GiB of RAM (in Hyper-V: static memory, not dynamic) and start the installer again."
+        fi
+        die "unpacking the system image failed (unsquashfs status $status)"
+    fi
     rm -rf "$TARGET/.totv-image"
     mkdir -p "$TARGET"/{proc,sys,dev,run,tmp}
     chmod 1777 "$TARGET/tmp"
