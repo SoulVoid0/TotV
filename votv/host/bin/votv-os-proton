@@ -33,8 +33,16 @@ install_ge() {
     read -r tar sum < <(python3 -c '
 import json, sys
 a = {x["name"]: x["browser_download_url"] for x in json.load(sys.stdin)["assets"]}
-t = next(n for n in a if n.endswith(".tar.gz"))
-s = next((n for n in a if n.endswith(".sha512sum")), "")
+# The x86-64 build: releases also carry an ARM (aarch64) one, which this PC cannot run.
+def ok(n):
+    l = n.lower()
+    return not any(w in l for w in ("aarch64", "arm64", "armhf", "riscv"))
+tars = [n for n in a if n.endswith(".tar.gz") and ok(n)]
+tars.sort(key=lambda n: ("x86_64" not in n and "amd64" not in n, n))
+if not tars:
+    sys.exit("no x86-64 GE-Proton build in the latest release")
+t = tars[0]
+s = t[:-len(".tar.gz")] + ".sha512sum"
 print(a[t], a.get(s, "-"))' <<<"$json")
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' RETURN
@@ -51,6 +59,11 @@ print(a[t], a.get(s, "-"))' <<<"$json")
     mkdir -p "$TOP/$tag.new"
     tar -xzf "$tmp/ge.tar.gz" -C "$TOP/$tag.new" --strip-components=1
     [ -x "$TOP/$tag.new/proton" ] || { echo "no proton script in the download" >&2; return 1; }
+    # Only a build this machine can run (the release also has an ARM one).
+    if ! file -L "$TOP/$tag.new/files/bin/wine" | grep -q -e 'x86-64' -e 'x86_64'; then
+        echo "the downloaded GE-Proton is not an x86-64 build: $(file -L "$TOP/$tag.new/files/bin/wine")" >&2
+        rm -rf "${TOP:?}/$tag.new"; return 1
+    fi
     rm -rf "${TOP:?}/$tag"
     mv "$TOP/$tag.new" "$TOP/$tag"
     old=$(current)

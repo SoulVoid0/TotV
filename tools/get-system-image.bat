@@ -10,7 +10,7 @@ rem (with the right size) are not downloaded again. Copy the ISO, or the parts w
 rem .parts file, to a USB stick: the TotV installer finds it there and installs offline.
 setlocal EnableExtensions EnableDelayedExpansion
 
-set "TOTV_VERSION=0.2.3"
+set "TOTV_VERSION=0.2.4"
 if not "%~1"=="" set "TOTV_VERSION=%~1"
 set "BASE=https://github.com/SoulVoid0/TotV/releases/download/v%TOTV_VERSION%"
 set "NAME=totv-system-%TOTV_VERSION%-x86_64.iso"

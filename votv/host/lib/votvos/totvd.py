@@ -306,6 +306,19 @@ def ensure_proton_owner() -> None:
     top = Path("/usr/share/totv/proton")
     try:
         votv = pwd.getpwnam(paths.SYSTEM_USER)
+        # 0.2.2 and 0.2.3 installed GE-Proton's ARM build by mistake: an x86-64 PC cannot run
+        # it ("Exec format error"). Remove it; totv-update / the game's next start reinstall.
+        wine = top / "current" / "files" / "bin" / "wine"
+        if wine.exists():
+            with open(wine, "rb") as f:
+                head = f.read(20)
+            if len(head) == 20 and head[:4] == b"\x7fELF" and int.from_bytes(head[18:20], "little") != 62:
+                import shutil
+                shutil.rmtree(top, ignore_errors=True)
+                shutil.rmtree("/var/lib/votv/prefix", ignore_errors=True)
+                print("totvd: removed a GE-Proton build for another CPU", file=sys.stderr)
+                subprocess.Popen(["/usr/bin/votv-os-proton", "install"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
         if not top.is_dir() or top.stat().st_uid == votv.pw_uid:
             return
         for d, dirs, files in os.walk(top):
