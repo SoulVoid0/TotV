@@ -73,6 +73,26 @@ mapfile -t pkgs < <(list "$top/os/target-packages.x86_64" "$top/votv/host/packag
 pacstrap -C "$conf" -K -c "$root" "${pkgs[@]}"
 
 # The installed system's pacman: Arch, multilib, and [totv] from GitHub releases (updates).
+# (Recent pacman packages may not install /etc/pacman.conf into a pacstrap root.)
+if [[ ! -s $root/etc/pacman.conf ]]; then
+    cat >"$root/etc/pacman.conf" <<'EOF2'
+# pacman configuration of TotV OS (see pacman.conf(5)).
+[options]
+HoldPkg     = pacman glibc
+Architecture = auto
+CheckSpace
+ParallelDownloads = 5
+SigLevel    = Required DatabaseOptional
+LocalFileSigLevel = Optional
+
+[core]
+Include = /etc/pacman.d/mirrorlist
+
+[extra]
+Include = /etc/pacman.d/mirrorlist
+EOF2
+fi
+[[ -s $root/etc/pacman.d/mirrorlist ]] || { mkdir -p "$root/etc/pacman.d"; cp /etc/pacman.d/mirrorlist "$root/etc/pacman.d/mirrorlist"; }
 grep -q '^Architecture' "$root/etc/pacman.conf" || sed -i '/^\[options\]/a Architecture = auto' "$root/etc/pacman.conf"
 grep -q '^\[multilib\]' "$root/etc/pacman.conf" || printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >>"$root/etc/pacman.conf"
 grep -q '^\[totv\]' "$root/etc/pacman.conf" || cat >>"$root/etc/pacman.conf" <<'EOF2'

@@ -459,6 +459,10 @@ do_system_config() {
 EOF
     # The installed system's pacman: Arch's repositories, multilib (games,
     # Wine) and TotV's own repository (lsiw, totv-base) on GitHub.
+    if [[ ! -s $TARGET/etc/pacman.conf ]]; then
+        printf '[options]\nHoldPkg = pacman glibc\nArchitecture = auto\nCheckSpace\nParallelDownloads = 5\nSigLevel = Required DatabaseOptional\nLocalFileSigLevel = Optional\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n\n[extra]\nInclude = /etc/pacman.d/mirrorlist\n' >"$TARGET/etc/pacman.conf"
+    fi
+    [[ -s $TARGET/etc/pacman.d/mirrorlist ]] || { mkdir -p "$TARGET/etc/pacman.d"; cp /etc/pacman.d/mirrorlist "$TARGET/etc/pacman.d/mirrorlist"; }
     grep -q '^Architecture' "$TARGET/etc/pacman.conf" || sed -i '/^\[options\]/a Architecture = auto' "$TARGET/etc/pacman.conf"
     if ! grep -q '^\[multilib\]' "$TARGET/etc/pacman.conf"; then
         printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >>"$TARGET/etc/pacman.conf"
