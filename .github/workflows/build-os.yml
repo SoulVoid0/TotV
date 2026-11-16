@@ -32,6 +32,8 @@ jobs:
   iso:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     container:
       image: archlinux:latest
       options: --privileged
@@ -42,6 +44,8 @@ jobs:
           pacman-key --populate archlinux
           pacman -Syu --noconfirm --needed archiso base-devel git curl unzip
       - uses: actions/checkout@v4
+      - id: version
+        run: echo "version=$(sed -n 's/^pkgver=//p' os/packages/totv-base/PKGBUILD)" >> "$GITHUB_OUTPUT"
       - name: Build packages and the installer ISO
         run: |
           bash os/build.sh --out out --work /tmp/totv-build
@@ -131,11 +135,12 @@ jobs:
           name: vm-test-logs
           path: vm-test/*.log
 
-  # A tag (v0.2.0, ...) publishes everything; installed systems' [totv] repository is
-  # .../releases/latest/download, and the installer downloads the system image parts
-  # from .../releases/download/v<version>.
+  # Every successful build of main (or a v* tag) publishes release v<totv-base version>,
+  # creating its tag; a later build of the same version replaces its files. Installed
+  # systems' [totv] repository is .../releases/latest/download, and the installer
+  # downloads the system image parts from .../releases/download/v<version>.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [iso, system]
     runs-on: ubuntu-latest
     steps:
@@ -145,6 +150,16 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.iso.outputs.version }}
+          name: TotV ${{ needs.iso.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          overwrite_files: true
+          body: |
+            **Install:** write `totv-${{ needs.iso.outputs.version }}-x86_64.iso` to a USB stick (`sudo tools/write-usb.sh`, balenaEtcher or Rufus in DD mode) and boot it.
+            The installer downloads the system image parts below (`totv-system-*.iso.partNN` + `.parts`), checks and merges them;
+            or copy those files to any USB stick (or use `write-usb.sh --system DIR`) to install without a network.
+            Installed systems update from this release's package repository with `totv-update`.
           files: |
             dl/totv-iso/*.iso
             dl/totv-iso/SHA256SUMS
