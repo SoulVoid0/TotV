@@ -165,8 +165,8 @@ split -b "${part_mib}M" -d -a 2 "$iso" "$iso.part"
 {
     echo "# TotV system image $version: the parts of $name.iso, in order (size sha256 name)"
     echo "image $(stat -c %s "$iso") $(sha256sum "$iso" | cut -d' ' -f1) $name.iso"
-    for p in "$iso".part*; do echo "part $(stat -c %s "$p") $(sha256sum "$p" | cut -d' ' -f1) $(basename "$p")"; done
+    for p in "$iso".part[0-9]*; do echo "part $(stat -c %s "$p") $(sha256sum "$p" | cut -d' ' -f1) $(basename "$p")"; done
 } >"$iso.parts"
 cat "$iso.parts"
 rm -rf "$work"
-msg "Done: $iso ($(du -h "$iso" | cut -f1)), $(ls "$iso".part* | wc -l) part(s)"
+msg "Done: $iso ($(du -h "$iso" | cut -f1)), $(find "$out" -maxdepth 1 -name "$name.iso.part[0-9]*" | wc -l) part(s)"

@@ -86,7 +86,8 @@ def uploads():
                        {"Referer": PAGE, "X-Requested-With": "XMLHttpRequest"}))
     dl_page = get(r["url"]).decode("utf-8", "replace")
     dl_key = r["url"].rstrip("/").rsplit("/", 1)[-1]
-    csrf2 = re.search(r'name="csrf_token"\s+value="([^"]+)"', dl_page) or re.search(r'csrf_token"\s*content="([^"]+)"', dl_page)
+    csrf2 = (re.search(r'name="csrf_token"\s+value="([^"]+)"', dl_page) or re.search(r'csrf_token"\s*content="([^"]+)"', dl_page)
+             or re.search(r'"csrf_token"\s*:\s*"([^"]+)"', dl_page) or csrf)
     # One <div class="upload"> per file: <strong class="name" title="FILE">DISPLAY NAME</strong>,
     # platform icons, and a download button with data-upload_id.
     for block in re.split(r'<div[^>]*class="upload"', dl_page)[1:]:
@@ -104,10 +105,23 @@ def uploads():
         v = find_version(display, filename)
 
         def fn(uid=uid[1]):
-            q = urllib.parse.urlencode({"source": "game_download", "key": dl_key})
-            d = json.loads(get(f"{PAGE.rstrip('/')}/file/{uid}?{q}", {"csrf_token": csrf2[1] if csrf2 else ""},
-                               {"Referer": r["url"]}))
-            return d["url"]
+            # The download page's button, then the game page's direct download (free games).
+            tries = [({"source": "game_download", "key": dl_key}, csrf2, r["url"]),
+                     ({"source": "view_game", "as_props": "1", "after_download_lightbox": "true"}, csrf, PAGE)]
+            last = None
+            for params, tok, ref in tries:
+                try:
+                    d = json.loads(get(f"{PAGE.rstrip('/')}/file/{uid}?{urllib.parse.urlencode(params)}",
+                                       {"csrf_token": tok[1] if tok else ""},
+                                       {"Referer": ref, "X-Requested-With": "XMLHttpRequest"}))
+                except (OSError, ValueError) as e:
+                    d = {"error": str(e)}
+                if isinstance(d, dict) and d.get("url"):
+                    return d["url"]
+                last = d
+                print(f"votv-os-game: itch.io answered {params['source']}: {json.dumps(d)[:300]}", file=sys.stderr)
+            raise SystemExit(f"votv-os-game: itch.io gave no download link ({json.dumps(last)[:200]}); "
+                             "set ITCH_API_KEY (an itch.io API key) or VOTV_URL (a direct link to the zip)")
         out.append((v, name, uid[1], fn))
     return out
 
