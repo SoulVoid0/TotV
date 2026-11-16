@@ -67,7 +67,6 @@ link_saves() {   # $1: a LOCALAPPDATA folder
 }
 localappdata=$(lsiw config get --linux LOCALAPPDATA 2>/dev/null || true)
 [ -n "$localappdata" ] && link_saves "$localappdata"
-link_saves "$HOME/.local/share/lsiw/shared/pfx/drive_c/users/steamuser/AppData/Local"
 
 export VOTV_OS_RUNTIME; VOTV_OS_RUNTIME=$(win "$RT")
 export VOTV_OS_SAVES; VOTV_OS_SAVES=$(win "$VOTV_ROOT/saves")
@@ -84,8 +83,9 @@ export LSIW_NO_IDENTITY=1
 mkdir -p "$DXVK_STATE_CACHE_PATH"
 
 engine="${VOTV_ENGINE:-$(cfg game.engine auto)}"
+PROTON_DIR="${VOTV_PROTON:-/usr/share/totv/proton/current}"
 if [ "$engine" = auto ]; then
-    if lsiw runners 2>/dev/null | grep -qi proton; then engine=proton; else engine=wine; fi
+    if [ -x "$PROTON_DIR/proton" ]; then engine=proton; else engine=wine; fi
 fi
 if [ "$engine" = wine ] && ! command -v wine >/dev/null; then
     echo "votv-os-launch-game: Wine is missing (it is part of TotV: sudo pacman -S wine)" >&2
@@ -97,6 +97,44 @@ args=(--mod-dir "$(win "$PROFILE/shimloader/mod")" --pak-dir "$(win "$PROFILE/sh
 runner=()
 command -v gamemoderun >/dev/null && runner=(gamemoderun)
 
-echo "votv-os-launch-game: $exe engine=$engine profile=$PROFILE"
+# The game's prefix: C: like LSIW's (= /), but C:\users is /users/shared.
+mirror_c() {   # $1: drive_c
+    local dc=$1 d name
+    [ -d "$dc" ] || return 0
+    mkdir -p /users/shared
+    if [ -d "$dc/users" ] && [ ! -L "$dc/users" ]; then
+        cp -a "$dc/users/." /users/shared/ && rm -rf "$dc/users"
+    fi
+    ln -sfn /users/shared "$dc/users"
+    for d in /*/ /.[!.]*/; do
+        [ -d "$d" ] || continue
+        name=$(basename "$d")
+        case "$name" in
+            proc|sys|dev|boot|lost+found|users|windows|"Program Files"|"Program Files (x86)"|ProgramData) continue ;;
+        esac
+        [ -e "$dc/$name" ] || [ -L "$dc/$name" ] || ln -s "/$name" "$dc/$name"
+    done
+}
+
+if [ "$engine" = proton ] || [[ $engine == proton:* ]]; then
+    [[ $engine == proton:* ]] && PROTON_DIR="/usr/share/totv/proton/${engine#proton:}"
+    [ -x "$PROTON_DIR/proton" ] || { echo "votv-os-launch-game: no GE-Proton in $PROTON_DIR (sudo votv-os-proton install)" >&2; exit 124; }
+    export STEAM_COMPAT_DATA_PATH="${VOTV_PREFIX:-$HOME/prefix}"
+    export STEAM_COMPAT_CLIENT_INSTALL_PATH="$HOME/.steam-compat"
+    export SteamAppId=0 SteamGameId=0 GAMEID=umu-0
+    mkdir -p "$STEAM_COMPAT_DATA_PATH" "$STEAM_COMPAT_CLIENT_INSTALL_PATH"
+    dc="$STEAM_COMPAT_DATA_PATH/pfx/drive_c"
+    if [ ! -d "$dc/windows/system32" ]; then
+        echo "votv-os-launch-game: creating the game's prefix in $STEAM_COMPAT_DATA_PATH"
+        "$PROTON_DIR/proton" run wineboot -u || echo "votv-os-launch-game: wineboot returned $?"
+    fi
+    mirror_c "$dc"
+    link_saves "/users/shared/steamuser/AppData/Local"
+    echo "votv-os-launch-game: $exe engine=proton ($(readlink -f "$PROTON_DIR")) prefix=$STEAM_COMPAT_DATA_PATH profile=$PROFILE"
+    cd "$win64" || exit 1
+    exec "${runner[@]}" "$PROTON_DIR/proton" run "$exe" "${args[@]}" "$@"
+fi
+
+echo "votv-os-launch-game: $exe engine=$engine (LSIW) profile=$PROFILE"
 cd "$win64" || exit 1
 exec "${runner[@]}" lsiw run -e "$engine" "$exe" "${args[@]}" "$@"

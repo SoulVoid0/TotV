@@ -9,6 +9,7 @@ follow=$(python3 -c 'import json; print(json.load(open("/etc/totv/votv.json")).g
 if [ "${1:-}" = --check ]; then
     if [ "$follow" = True ]; then votv-os-game update --check || [ $? -ne 100 ] || rc=100; fi
     votv-os-r2modman update --check || [ $? -ne 100 ] || rc=100
+    votv-os-proton update --check || [ $? -ne 100 ] || rc=100
     exit "$rc"
 fi
 if [ "$follow" = True ]; then
@@ -17,6 +18,10 @@ if [ "$follow" = True ]; then
     [ "$(readlink /.VotV/current || true)" != "$old" ] && touch /run/totv/votv-os/restart-game
 fi
 votv-os-r2modman update
+oldge=$(readlink /usr/share/totv/proton/current || true)
+votv-os-proton update
+[ -z "$oldge" ] && [ ! -e /usr/share/totv/proton/current ] && votv-os-proton install
+[ "$(readlink /usr/share/totv/proton/current || true)" != "$oldge" ] && touch /run/totv/votv-os/restart-game
 votv-os-r2modman seed
 votv-os-install-game --shimloader-only 2>/dev/null || true
 # A new TotVOS mod (from pacman) loads at the next game start.

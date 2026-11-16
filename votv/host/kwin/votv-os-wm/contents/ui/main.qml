@@ -2,7 +2,8 @@
 // Asks votv-os-bridge (org.totv.VotvOS.WindowState) ten times a second where each
 // window belongs:
 //   the game          fullscreen on the primary monitor
-//   the PC            the login screen (votv-login) while nobody is logged in, else the
+//   the PC            (fullscreen whenever the game is not running)
+//                     the login screen (votv-login) while nobody is logged in, else the
 //                     user's desktop (nested KWin running Plasma): over the game,
 //                     fullscreen on the primary monitor while the player uses the in-game
 //                     PC; minimized otherwise (it keeps running so the in-game screen
@@ -88,7 +89,6 @@ Item {
     function apply(s) {
         const primary = outputNamed(s.primary) || Workspace.activeScreen;
         const invOut = s.inventory.screen ? outputNamed(s.inventory.screen) : null;
-        const pcVisible = !!s.pc.visible;
         const invVisible = !!s.inventory.visible && invOut !== null;
         let game = null, pc = null, inv = null;
         const others = (s.pc.others || []);
@@ -108,6 +108,10 @@ Item {
             else if (isGame(w, s.game.classes)) game = w;
         }
 
+        // Without the game (starting, crashed, not installed) the PC is the screen: the login
+        // screen or the desktop, fullscreen, so TotV stays usable.
+        const pcVisible = !!s.pc.visible || !game;
+
         if (game) {
             if (game.output !== primary) Workspace.sendClientToScreen(game, primary);
             if (!game.fullScreen) game.fullScreen = true;
@@ -117,7 +121,7 @@ Item {
             fill(pc, primary);
             if (pcVisible) {
                 if (pc.minimized) pc.minimized = false;
-                pc.keepAbove = true;
+                pc.keepAbove = !!game;   // over the game; without it, dialogs stay on top
                 if (!root.pcWasVisible) Workspace.activeWindow = pc;
             } else {
                 pc.keepAbove = false;

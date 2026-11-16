@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TotV Logs
+Comment=What TotV and Voices of the Void did: game, mod, shell, install, update and system logs
+Exec=totv-logs
+Icon=utilities-log-viewer
+Categories=System;
+StartupWMClass=totv-logs

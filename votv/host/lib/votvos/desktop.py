@@ -8,6 +8,8 @@ votv-pc-agent   (inside a user's KDE desktop) captures the desktop for the in-ga
 votv-mods       (KDE desktop) VotV Mods: download and install Thunderstore mods into the
                 r2modman profile the game loads (r2modman will not while the game runs);
                 "Apply mods" restarts TotV OS so the game starts with them
+totv-logs       (KDE desktop) TotV Logs: the game, session, UE4SS, install, update and
+                system logs, live, to see what works and what does not
 votv-logout     (KDE desktop) log out: back to the shared Home save
 totv-updater    (KDE desktop) TotV Update: update the OS, the game and r2modman in place
 """
@@ -20,13 +22,14 @@ import pwd
 import signal
 import subprocess
 import sys
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QGuiApplication
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog,
-                             QDialogButtonBox, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
-                             QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit,
-                             QPushButton, QSpinBox, QVBoxLayout, QWidget)
+                             QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog,
+                             QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
+                             QPlainTextEdit, QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 
 from . import config, paths
 from .bridge import totvd
@@ -494,6 +497,110 @@ def mods_main() -> int:
     app.setApplicationName("votv-mods")
     app.setDesktopFileName("votv-mods")
     w = Mods()
+    w.show()
+    return app.exec()
+
+
+# totv-logs ------------------------------------------------------------------------------------
+def _tail(path: str, lines: int = 3000) -> str:
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 2_000_000))
+            data = f.read().decode("utf-8", "replace")
+    except OSError as e:
+        return f"({path}: {e.strerror})"
+    return "\n".join(data.splitlines()[-lines:])
+
+
+def _ue4ss_log() -> str:
+    for p in sorted(paths.GAME_DIR.glob("**/UE4SS.log")):
+        return str(p)
+    return str(paths.GAME_DIR / "VotV/Binaries/Win64/UE4SS.log")
+
+
+def _journal() -> str:
+    try:
+        p = subprocess.run(["journalctl", "-b", "-p", "warning", "-n", "400", "--no-pager"],
+                           capture_output=True, text=True, timeout=10)
+        return p.stdout or p.stderr or "(empty)"
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"(journalctl: {e})"
+
+
+class Logs(QWidget):
+    """Every log that says what TotV and the game did, live (the visible tab every 2 s)."""
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("TotV Logs")
+        rt = str(paths.runtime_dir())
+        self.sources = [
+            ("Game", lambda: _tail(f"{rt}/game.log")),
+            ("Mod (UE4SS)", lambda: _tail(_ue4ss_log())),
+            ("TotV shell", lambda: "\n".join(l for l in _tail(f"{rt}/session.log").splitlines()
+                                              if not l.startswith("qml:"))),
+            ("Install", lambda: _tail("/var/log/totv-install.log")),
+            ("Updates", lambda: _tail("/var/log/totv-update.log")),
+            ("System (warnings)", _journal),
+        ]
+        lay = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        self.views: list[QPlainTextEdit] = []
+        mono = QFont("monospace")
+        mono.setStyleHint(QFont.StyleHint.Monospace)
+        for name, _fn in self.sources:
+            v = QPlainTextEdit()
+            v.setReadOnly(True)
+            v.setFont(mono)
+            v.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+            self.tabs.addTab(v, name)
+            self.views.append(v)
+        lay.addWidget(self.tabs, 1)
+        row = QHBoxLayout()
+        self.follow = QPushButton("Follow: on")
+        self.follow.setCheckable(True)
+        self.follow.setChecked(True)
+        self.follow.toggled.connect(lambda on: self.follow.setText(f"Follow: {'on' if on else 'off'}"))
+        copy = QPushButton("Copy")
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(self.views[self.tabs.currentIndex()].toPlainText()))
+        save = QPushButton("Save as…")
+        save.clicked.connect(self.save)
+        row.addWidget(self.follow)
+        row.addStretch(1)
+        row.addWidget(copy)
+        row.addWidget(save)
+        lay.addLayout(row)
+        self.resize(1100, 700)
+        self.tabs.currentChanged.connect(lambda *_: self.refresh())
+        t = QTimer(self, interval=2000)
+        t.timeout.connect(self.refresh)
+        t.start()
+        self.refresh()
+
+    def refresh(self) -> None:
+        i = self.tabs.currentIndex()
+        v = self.views[i]
+        text = self.sources[i][1]()
+        if text != v.toPlainText():
+            bar = v.verticalScrollBar()
+            keep = bar.value()
+            v.setPlainText(text)
+            bar.setValue(bar.maximum() if self.follow.isChecked() else keep)
+
+    def save(self) -> None:
+        name = self.tabs.tabText(self.tabs.currentIndex()).split()[0].lower()
+        f, _ = QFileDialog.getSaveFileName(self, "Save log", f"{Path.home()}/totv-{name}.log")
+        if f:
+            Path(f).write_text(self.views[self.tabs.currentIndex()].toPlainText())
+
+
+def logs_main() -> int:
+    app = QApplication(sys.argv)
+    app.setApplicationName("totv-logs")
+    app.setDesktopFileName("totv-logs")
+    w = Logs()
     w.show()
     return app.exec()
 

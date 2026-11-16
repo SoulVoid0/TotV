@@ -53,8 +53,13 @@ SOURCE=auto IMAGE='' IMAGE_URL='' IMAGE_KIND=''
 # Helpers
 # ---------------------------------------------------------------------------
 log() { printf '[%(%H:%M:%S)T] %s\n' -1 "$*" >>"$LOG"; }
+UI=/run/totv-ui
 die() {
+    # Once: a die inside a $(...) subshell already showed the message.
+    [[ -e $UI/died ]] && exit 1
+    mkdir -p "$UI"; touch "$UI/died"
     log "ERROR: $*"
+    ui_stop failed
     if ((INTERACTIVE)); then
         # The end of the log says why; dialog's own screen is the terminal, not the step's log.
         local tailtxt
@@ -74,26 +79,105 @@ ask() { dialog --backtitle "$TITLE" "$@" 3>&1 1>&2 2>&3; }
 # Partition N of DISK: /dev/sda3, /dev/nvme0n1p3, /dev/mmcblk0p3.
 part() { if [[ $1 =~ [0-9]$ ]]; then echo "${1}p$2"; else echo "$1$2"; fi; }
 
-# Runs a step, showing it in a progress box when interactive.
-STEP_NO=0 STEP_TOTAL=12
+# The installation screen: the steps with their state ([ok] done, [x] failed, the current
+# one with its own progress), the overall progress, the current step's progress and
+# the newest lines of the log, redrawn every second while a step runs.
+STEP_NO=0
+STEP_LABELS=()
+ui_set() { mkdir -p "$UI"; printf '%s' "$2" >"$UI/$1"; }   # NAME VALUE
+ui_get() { cat "$UI/$1" 2>/dev/null || true; }
+
+ui_bar() {   # PERCENT WIDTH
+    local p=$1 w=$2 f
+    ((p < 0)) && p=0; ((p > 100)) && p=100
+    f=$((p * w / 100))
+    printf '[%s%s] %3d%%' "$(printf '%*s' "$f" '' | tr ' ' '#')" "$(printf '%*s' $((w - f)) '' | tr ' ' '.')" "$p"
+}
+
+ui_render() {
+    ((INTERACTIVE)) || return 0
+    local rows cols cur sub msg i st items=() done=0 overall loglines text
+    local size
+    size=$( { stty size </dev/tty; } 2>/dev/null || true)
+    rows=${size%% *}; cols=${size##* }
+    [[ $rows =~ ^[0-9]+$ ]] && ((rows >= 20)) || rows=25
+    [[ $cols =~ ^[0-9]+$ ]] && ((cols >= 70)) || cols=80
+    cur=$(ui_get cur); sub=$(ui_get sub); msg=$(ui_get msg)
+    cur=${cur:-0}; sub=${sub:--1}
+    mapfile -t states < <(ui_get states)
+    for i in "${!STEP_LABELS[@]}"; do
+        st=${states[$i]:-pending}
+        case $st in
+            ok) items+=("[ok] ${STEP_LABELS[$i]}" 3); done=$((done + 1)) ;;
+            failed) items+=("[x]  ${STEP_LABELS[$i]}" 1) ;;
+            run) if ((sub >= 0)); then items+=(">>   ${STEP_LABELS[$i]}" "-$sub"); else items+=(">>   ${STEP_LABELS[$i]}" 7); fi ;;
+            *) items+=("     ${STEP_LABELS[$i]}" 8) ;;
+        esac
+    done
+    local n=${#STEP_LABELS[@]}
+    overall=$(( (done * 100 + (sub > 0 ? sub : 0)) / (n > 0 ? n : 1) ))
+    local w=$((cols - 10)); ((w > 150)) && w=150
+    local logn=$((rows - n - 16)); ((logn < 3)) && logn=3
+    loglines=$( { grep -v -e '^\[..:..:..\] progress ' "$LOG" | tail -n "$logn" | cut -c1-$((w - 6)) | sed 's/\\/\\\\/g'; } 2>/dev/null || true)
+    text="Now: ${STEP_LABELS[$cur]:-}${msg:+\n$msg}"
+    ((sub >= 0)) && text+="\nThis step: $(ui_bar "$sub" $((w - 24)))"
+    text+="\nAll steps:  $(ui_bar "$overall" $((w - 24)))\n\nLog (${LOG}; Alt+F2: shell, user root):\n${loglines//$'\n'/\\n}"
+    dialog --backtitle "$TITLE" --title "Installing TotV" --mixedgauge "$text" $((rows - 2)) "$w" "$overall" "${items[@]}" \
+        </dev/null >/dev/tty 2>/dev/null || true
+}
+
+ui_ticker() {   # redraws every second while a step runs (a background subshell)
+    trap - ERR; set +e
+    while [[ -e $UI/ticking ]]; do ui_render; sleep 1; done
+}
+
+ui_stop() {   # [failed]: stop redrawing; the current step is ok or failed
+    if [[ -e $UI/ticking ]]; then
+        rm -f "$UI/ticking"
+        [[ -n ${UI_TICKER:-} ]] && wait "$UI_TICKER" 2>/dev/null || true
+    fi
+    if [[ ${1:-} == failed ]] && ((STEP_NO > 0)); then
+        mapfile -t states < <(ui_get states)
+        states[STEP_NO - 1]=failed
+        printf '%s\n' "${states[@]}" >"$UI/states"
+        ui_set sub -1
+        ui_render
+    fi
+}
+
+# Runs a step: its output goes to the log, the screen shows its progress live.
 step() {
     local msg=$1; shift
     STEP_NO=$((STEP_NO + 1))
     log "== $msg"
     if ((INTERACTIVE)); then
-        dialog --backtitle "$TITLE" --title "Installing" \
-            --gauge "$msg" 8 70 $((STEP_NO * 100 / STEP_TOTAL)) </dev/null || true
+        mkdir -p "$UI"
+        mapfile -t states < <(ui_get states)
+        states[STEP_NO - 1]=run
+        printf '%s\n' "${states[@]}" >"$UI/states"
+        ui_set cur $((STEP_NO - 1)); ui_set sub -1; ui_set msg ""
+        touch "$UI/ticking"
+        ui_ticker & UI_TICKER=$!
     else
-        echo ":: [$STEP_NO/$STEP_TOTAL] $msg"
+        echo ":: [$STEP_NO/${#STEP_LABELS[@]}] $msg"
     fi
     "$@" >>"$LOG" 2>&1
+    log "[ok] $msg"
+    if ((INTERACTIVE)); then
+        ui_stop
+        mapfile -t states < <(ui_get states)
+        states[STEP_NO - 1]=ok
+        printf '%s\n' "${states[@]}" >"$UI/states"
+        ui_set sub -1; ui_set msg ""
+        ui_render
+    fi
 }
 
 valid_username() {
     [[ $1 =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || return 1
     case $1 in
         root|bin|daemon|mail|ftp|http|nobody|dbus|polkitd|rtkit|uuidd|git|alpm|\
-        systemd-*|avahi|colord|sddm|gdm|lightdm|cdrive|wheel|users|admin|steamuser|public|default|votv|totv)
+        systemd-*|avahi|colord|sddm|gdm|lightdm|cdrive|wheel|users|admin|steamuser|shared|public|default|votv|totv)
             return 1 ;;
     esac
 }
@@ -244,7 +328,8 @@ mount_media() {
         mountpoint -q "$mp" && continue
         mkdir -p "$mp"
         mount -o ro "$d" "$mp" 2>/dev/null || rmdir "$mp" 2>/dev/null || true
-    done < <(lsblk -pnlo NAME,TYPE,FSTYPE | awk '($2=="part" || $2=="disk") && $3!="" && $3!="iso9660" {print $1}')
+    done < <(lsblk -pnlo NAME,TYPE,FSTYPE | awk -v boot="$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null)" \
+                 '($2=="part" || $2=="disk" || $2=="rom") && $3!="" && $1!=boot {print $1}')
 }
 
 # The system image for this version: a whole .iso or a .parts index (with its parts
@@ -253,6 +338,13 @@ find_local_image() {
     local f best=''
     [[ -n $IMAGE ]] && { [[ $IMAGE == *.parts ]] && IMAGE_KIND=parts || IMAGE_KIND=iso; return 0; }
     mount_media
+    # The merged system ISO itself as a drive (a DVD, or a virtual DVD in a VM).
+    for f in "$MEDIA"/*/totv-system/rootfs.sfs; do
+        [[ -e $f ]] || continue
+        IMAGE=$(dirname "$(dirname "$f")") IMAGE_KIND=dir
+        log "system image found as a drive: $IMAGE"
+        return 0
+    done
     for f in "$MEDIA"/*/totv-system-*-x86_64.iso.parts "$MEDIA"/*/*/totv-system-*-x86_64.iso.parts \
              "$MEDIA"/*/totv-system-*-x86_64.iso "$MEDIA"/*/*/totv-system-*-x86_64.iso; do
         [[ -e $f ]] || continue
@@ -301,6 +393,7 @@ pick_sources() {
 describe_source() {
     case $SOURCE/$IMAGE_KIND in
         image/iso) echo "the system image $(basename "$IMAGE")" ;;
+        image/dir) echo "the system image on the drive $(findmnt -no SOURCE "$IMAGE" 2>/dev/null || echo "$IMAGE")" ;;
         image/parts) echo "the system image parts next to $(basename "$IMAGE")" ;;
         image/remote) echo "the system image, downloaded from GitHub and merged" ;;
         *) echo "packages from the internet (no system image found)" ;;
@@ -370,10 +463,11 @@ do_mount() {
 # The system image: merged (when in parts) into a file on the target disk, checked,
 # and unpacked into the target root.
 # Progress of the long phases, on the installer's screen (the step's output goes to the log).
-show() {   # MESSAGE PERCENT
+show() {   # MESSAGE PERCENT: the current step's own progress (the live screen draws it)
     log "progress $2%: ${1//$'\n'/ }"
     ((INTERACTIVE)) || return 0
-    dialog --backtitle "$TITLE" --title "Installing the system" --gauge "$1" 11 74 "$2" </dev/null >/dev/tty 2>&1 || true
+    ui_set sub "$2"
+    ui_set msg "${1//$'\n'/ }"
 }
 mib() { echo $(($1 / 1048576)); }
 
@@ -502,18 +596,22 @@ release_image() {
 
 do_image() {
     local iso mnt=/run/totv-image
-    iso=$(fetch_image)
-    [[ -n $iso ]] || die "the system image could not be prepared"
-    mkdir -p "$mnt"
-    if [[ -b $iso ]]; then mount -o ro "$iso" "$mnt"; else mount -o loop,ro "$iso" "$mnt"; fi
-    [[ -f $mnt/totv-system/rootfs.sfs ]] || { umount "$mnt"; release_image; die "$(basename "$iso") is not a TotV system image"; }
+    if [[ $IMAGE_KIND == dir ]]; then
+        iso=$IMAGE mnt=$IMAGE   # already mounted (a DVD with the system image)
+    else
+        iso=$(fetch_image)
+        [[ -n $iso ]] || die "the system image could not be prepared"
+        mkdir -p "$mnt"
+        if [[ -b $iso ]]; then mount -o ro "$iso" "$mnt"; else mount -o loop,ro "$iso" "$mnt"; fi
+    fi
+    [[ -f $mnt/totv-system/rootfs.sfs ]] || { [[ $mnt == /run/totv-image ]] && umount "$mnt"; release_image; die "$(basename "$iso") is not a TotV system image"; }
     log "manifest: $(cat "$mnt/totv-system/manifest.json" 2>/dev/null)"
     local need avail
     need=$(grep -o '"installed_bytes": *[0-9]*' "$mnt/totv-system/manifest.json" 2>/dev/null | grep -o '[0-9]*$' || echo 0)
     avail=$(df -B1 --output=avail "$TARGET" | tail -n1)
     log "space: the system needs $(mib "$need") MiB, $(mib "$avail") MiB free on $DISK"
     if ((need > 0 && avail < need + 1073741824)); then
-        umount "$mnt"; release_image
+        [[ $mnt == /run/totv-image ]] && umount "$mnt"; release_image
         die "$DISK is too small: TotV needs $(( (need + 1073741824) / 1073741824 )) GiB free to unpack, $(( avail / 1073741824 )) GiB are free (the downloaded image itself takes $(( $(size_of "$iso") / 1073741824 )) GiB until it is unpacked). Use a disk of at least 32 GiB."
     fi
     # Unpacking: unsquashfs -percentage prints one number per line.
@@ -549,7 +647,7 @@ do_image() {
         unsquashfs "${lowmem[@]}" -f -d "$TARGET" "$mnt/totv-system/rootfs.sfs" >>"$LOG" 2>&1 || status=$?
         [[ $status == 2 ]] && { log "unsquashfs reported non-fatal errors (status 2); continuing"; status=0; }
     fi
-    umount "$mnt"
+    [[ $mnt == /run/totv-image ]] && umount "$mnt"
     release_image
     if ((status != 0)); then
         if dmesg 2>/dev/null | tail -n 50 | grep -q -i -e 'killed process.*unsquashfs' -e 'out of memory'; then
@@ -630,16 +728,10 @@ do_users() {
     fi
     # C:\users\<name> is the user's profile, for every LSIW engine.
     ln -sfn "/home/$USERNAME" "$TARGET/users/$USERNAME"
-    in_target chown -h "$USERNAME:cdrive" "/users/$USERNAME"
-    # Proton's Windows profile (C:\users\steamuser, = /users/steamuser since C: is /) is
-    # the profile of the game's system user: Voices of the Void runs as votv.
-    if in_target getent passwd votv >/dev/null 2>&1; then
-        ln -sfn /var/lib/votv "$TARGET/users/steamuser"
-        in_target chown -h votv:cdrive /users/steamuser
-    else
-        ln -sfn "/home/$USERNAME" "$TARGET/users/steamuser"
-        in_target chown -h "$USERNAME:cdrive" /users/steamuser
-    fi
+    # C:\users\steamuser (Proton's profile; C: is /) is the user's own. The game has a
+    # prefix of its own whose C:\users is /users/shared.
+    ln -sfn "/home/$USERNAME" "$TARGET/users/steamuser"
+    in_target chown -h "$USERNAME:cdrive" "/users/$USERNAME" "/users/steamuser"
     # AUTOLOGIN (totv.conf): totvd logs the user in once the shared Home save has loaded.
     :
 }
@@ -679,6 +771,12 @@ do_bootloader() {
     # --removable: \EFI\BOOT\BOOTX64.EFI, found by every UEFI firmware
     # without a boot entry, so the disk boots on other computers too.
     in_target grub-install --target=x86_64-efi --efi-directory=/boot --removable --recheck
+    # Booted with UEFI: also a firmware boot entry "TotV", so the disk is started even when
+    # the firmware lists it after another device (the removable path still works elsewhere).
+    if [[ -d /sys/firmware/efi/efivars ]]; then
+        in_target grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=TotV --recheck \
+            || log "warning: no UEFI boot entry for TotV (the removable path \\EFI\\BOOT\\BOOTX64.EFI still works)"
+    fi
     in_target grub-mkconfig -o /boot/grub/grub.cfg
 }
 
@@ -774,23 +872,32 @@ Choose Shell to leave the installer; type totv-install to start it again." 14 76
     fi
     log "disk=$DISK user=$USERNAME host=$HOSTNAME_ tz=$TIMEZONE locale=$LOCALE keymap=$KEYMAP autologin=$AUTOLOGIN options='$OPTIONS' offline=$OFFLINE"
 
+    STEP_LABELS=("Preparing $DISK" "Partitioning $DISK" "Formatting" "Mounting"
+                 "Installing the system: $(describe_source)" "Configuring the system"
+                 "Creating user $USERNAME" "Writing /etc/totv" "Installing the bootloader"
+                 "Setting up Voices of the Void" "Finishing")
+    rm -rf "$UI"; mkdir -p "$UI"
     step "Preparing $DISK" do_cleanup_target
     step "Partitioning $DISK" do_partition
     step "Formatting" do_format
     step "Mounting" do_mount
-    step "Installing the system: $(describe_source) (this takes a while)" do_install_system
+    step "Installing the system: $(describe_source)" do_install_system
     step "Configuring the system" do_system_config
     step "Creating user $USERNAME" do_users
     step "Writing /etc/totv" do_totv_config
     step "Installing the bootloader" do_bootloader
     step "Setting up Voices of the Void" do_votv
     step "Finishing" do_finish
-    STEP_NO=$((STEP_TOTAL - 1))
-    step "Done" true
 
     if ((INTERACTIVE)); then
+        local vm=""
+        if systemd-detect-virt -q 2>/dev/null; then
+            vm="\n\nIn a virtual machine ($(systemd-detect-virt 2>/dev/null)): remove the installer ISO from the virtual DVD drive (or put the hard disk first in the boot order), and turn Secure Boot off (Hyper-V: Settings, Security), before you start the VM again."
+        elif [[ -d /sys/firmware/efi ]] && [[ $(od -An -tu1 -j4 -N1 /sys/firmware/efi/efivars/SecureBoot-* 2>/dev/null | tr -d ' ') == 1 ]]; then
+            vm="\n\nSecure Boot is on: turn it off in the firmware settings, or the computer will not start TotV."
+        fi
         if dialog --backtitle "$TITLE" --title "TotV is installed" --yes-label "Reboot" --no-label "Shell" --yesno \
-            "TotV is installed on $DISK.\n\nRemove the installer USB stick and reboot. TotV starts in the shared Home save; log in as $USERNAME on the in-game PC to go to your own save." 10 64; then
+            "TotV is installed on $DISK.\n\nRemove the installer USB stick, then reboot. TotV starts in the shared Home save; log in as $USERNAME on the in-game PC to go to your own save.$vm" 16 74; then
             reboot
         fi
         clear

@@ -7,7 +7,7 @@
 # build.sh copies the repository's votv/ folder next to this file before makepkg.
 
 pkgname=votv-os
-pkgver=2.0.1
+pkgver=2.0.2
 pkgrel=1
 pkgdesc='Voices of the Void integration of TotV OS (TotVOS mod, shell, apps)'
 arch=(any)

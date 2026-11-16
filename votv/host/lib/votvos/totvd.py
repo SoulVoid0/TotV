@@ -275,27 +275,29 @@ class Helper:
 
 
 def ensure_proton_profile() -> None:
-    """C:\\users\\steamuser (Proton's Windows profile) is /users/steamuser, because C: is /
-    on TotV. The game runs as votv, so it must be votv's home; older installs pointed it at
-    the installer's user, and Proton could not create the game's prefix."""
+    """TotV 0.2.1 pointed C:\\users\\steamuser (/users/steamuser) at the game user's home.
+    Since 0.2.2 the game has a prefix of its own (C:\\users = /users/shared), and
+    /users/steamuser is the installed user's again, for their own Proton programs."""
     link = Path("/users/steamuser")
     try:
         votv = pwd.getpwnam(paths.SYSTEM_USER)
-        if link.is_symlink() and os.readlink(link) == votv.pw_dir:
+        if not (link.is_symlink() and os.readlink(link) == votv.pw_dir):
             return
-        if link.exists() and not link.is_symlink():
-            return   # a real folder someone made: leave it
+        user = paths.read_kv(paths.USER_CONF).get("USERNAME", "")
+        home = pwd.getpwnam(user).pw_dir if user else ""
+        if not home:
+            return
         tmp = Path("/users/.steamuser.totvd")
         try:
             tmp.unlink()
         except FileNotFoundError:
             pass
-        tmp.symlink_to(votv.pw_dir)
-        os.lchown(tmp, votv.pw_uid, grp.getgrnam("cdrive").gr_gid)
+        tmp.symlink_to(home)
+        os.lchown(tmp, pwd.getpwnam(user).pw_uid, grp.getgrnam("cdrive").gr_gid)
         os.replace(tmp, link)
-        print(f"totvd: /users/steamuser -> {votv.pw_dir}", file=sys.stderr)
+        print(f"totvd: /users/steamuser -> {home} again", file=sys.stderr)
     except (KeyError, OSError) as e:
-        print(f"totvd: cannot fix /users/steamuser: {e}", file=sys.stderr)
+        print(f"totvd: cannot check /users/steamuser: {e}", file=sys.stderr)
 
 
 def main() -> int:

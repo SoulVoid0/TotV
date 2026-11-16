@@ -1,0 +1,69 @@
+#!/bin/bash
+# GE-Proton for Voices of the Void, installed system-wide in /usr/share/totv/proton/
+# (/usr/share/totv/proton/current -> the version in use). The game runs with it in a
+# prefix of its own (see votv-os-launch-game); LSIW keeps its own runners for people's
+# own programs.
+#
+#   votv-os-proton install [--root R]   the latest GE-Proton release (SHA-512 checked)
+#   votv-os-proton update [--check]     a newer release, if there is one
+#   votv-os-proton path                 the folder of the version in use
+set -euo pipefail
+
+cmd="${1:-}"; shift || true
+ROOT=/
+[ "${1:-}" = --root ] && { ROOT="$2"; shift 2; }
+R="${ROOT%/}"
+TOP="$R/usr/share/totv/proton"
+REPO="${GE_PROTON_REPO:-GloriousEggroll/proton-ge-custom}"
+
+latest_json() { curl -fsSL --retry 3 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/releases/latest"; }
+current() { basename "$(readlink "$TOP/current" 2>/dev/null || echo none)"; }
+
+install_ge() {
+    local json tag tar sum tmp
+    json=$(latest_json)
+    tag=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])' <<<"$json")
+    read -r tar sum < <(python3 -c '
+import json, sys
+a = {x["name"]: x["browser_download_url"] for x in json.load(sys.stdin)["assets"]}
+t = next(n for n in a if n.endswith(".tar.gz"))
+s = next((n for n in a if n.endswith(".sha512sum")), "")
+print(a[t], a.get(s, "-"))' <<<"$json")
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' RETURN
+    echo "downloading $tag"
+    curl -fL --retry 3 -o "$tmp/ge.tar.gz" "$tar"
+    if [ "$sum" != "-" ]; then
+        curl -fsSL --retry 3 -o "$tmp/ge.sha512sum" "$sum"
+        [ "$(sha512sum "$tmp/ge.tar.gz" | cut -d' ' -f1)" = "$(cut -d' ' -f1 "$tmp/ge.sha512sum")" ] \
+            || { echo "GE-Proton download is damaged (SHA-512 mismatch)" >&2; return 1; }
+        echo "checksum verified (SHA-512)"
+    fi
+    mkdir -p "$TOP"
+    rm -rf "${TOP:?}/$tag.new"
+    mkdir -p "$TOP/$tag.new"
+    tar -xzf "$tmp/ge.tar.gz" -C "$TOP/$tag.new" --strip-components=1
+    [ -x "$TOP/$tag.new/proton" ] || { echo "no proton script in the download" >&2; return 1; }
+    rm -rf "${TOP:?}/$tag"
+    mv "$TOP/$tag.new" "$TOP/$tag"
+    old=$(current)
+    ln -sfn "$tag" "$TOP/current"
+    [ "$old" != none ] && [ "$old" != "$tag" ] && rm -rf "${TOP:?}/$old"
+    echo "GE-Proton $tag installed in ${TOP#"$R"}/$tag"
+}
+
+case "$cmd" in
+    install) install_ge ;;
+    update)
+        new=$(latest_json | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])') \
+            || { echo "GE-Proton: cannot check for updates"; exit 0; }
+        cur=$(current)
+        if [ "$new" != "$cur" ]; then
+            [ "${1:-}" = --check ] && { echo "GE-Proton: $cur -> $new available"; exit 100; }
+            install_ge
+        else
+            echo "GE-Proton $cur is the newest"
+        fi ;;
+    path) readlink -f "$TOP/current" ;;
+    *) sed -n '2,10s/^# \{0,1\}//p' "$0"; exit 2 ;;
+esac

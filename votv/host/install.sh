@@ -39,7 +39,7 @@ touch "$LIB/mods/TotVOS/enabled.txt"
 [ -f "$HERE/vendor/shimloader/dwmapi.dll" ] && cp -f "$HERE"/vendor/shimloader/* "$LIB/shimloader/"
 
 for b in votv-os-session votv-pc-session votv-os-launch-game votv-os-install-game votv-os-fetch-deps \
-         votv-os-game votv-os-r2modman votv-wayland-socket; do
+         votv-os-game votv-os-r2modman votv-os-proton votv-wayland-socket; do
     install -Dm755 "$HERE/bin/$b" "$ROOT/usr/bin/$b"
 done
 for b in votv-os-session-main votv-pc-desktop votv-os-engine-ini; do
@@ -68,6 +68,7 @@ totv-updater desktop:updater_main
 votv-os-ctl desktop:ctl_main
 totvd totvd:main
 votv-mods desktop:mods_main
+totv-logs desktop:logs_main
 EOT
 cat > "$ROOT/usr/bin/votv-saves" <<'EOS'
 #!/usr/bin/python3
@@ -95,7 +96,7 @@ for f in "$HERE"/share/applications/*.desktop; do
     install -Dm644 "$f" "$ROOT/usr/share/applications/$(basename "$f")"
 done
 # Icons on every user's PC desktop (Plasma's desktop shows ~/Desktop).
-DESKTOP_APPS="votv-pc votv-saves votv-mods r2modman votv-screen-setup totv-updater votv-restart-game votv-logout"
+DESKTOP_APPS="votv-pc votv-saves votv-mods r2modman votv-screen-setup totv-updater totv-logs votv-restart-game votv-logout"
 install -d "$ROOT/etc/skel/Desktop"
 for app in $DESKTOP_APPS; do
     install -m755 "$HERE/share/applications/$app.desktop" "$ROOT/etc/skel/Desktop/$app.desktop"
@@ -137,9 +138,9 @@ for u in $users; do
 done
 
 # 4. LSIW for the game: Wine (always installed), GE-Proton when there is a network --------------
-# The votv user's own LSIW settings: Wine from PATH, no update check. The game reaches the
-# system through Z:\ (= /). /users/votv and /users/steamuser (Proton's profile, C:\users\
-# steamuser, since C: is /) are the game user's home: it must be able to write there.
+# The game runs with GE-Proton in a prefix of its own whose C:\users is /users/shared (see
+# votv-os-launch-game); /users/steamuser stays the installed user's. The votv user's LSIW
+# settings (for the Wine engine): Wine from PATH, no update check.
 install -d "$ROOT/var/lib/votv/.config/lsiw"
 cat > "$ROOT/var/lib/votv/.config/lsiw/lsiw.conf" <<'EOS'
 # LSIW for the votv system user (Voices of the Void on TotV OS), from votv-os.
@@ -153,14 +154,12 @@ full_c_drive = false
 check = false
 EOS
 ln -sfn /var/lib/votv "$ROOT/users/votv" 2>/dev/null || true
-# Proton's profile C:\users\steamuser is /users/steamuser (C: is /): the game's user's.
-ln -sfn /var/lib/votv "$ROOT/users/steamuser" 2>/dev/null || true
-in_root chown -h votv:cdrive /users/steamuser 2>/dev/null || true
-in_root chown -R votv:votv /var/lib/votv
+install -d "$ROOT/users/shared"   # C:\users of the game's own prefix (votv-os-launch-game)
+in_root chown -R votv:votv /var/lib/votv /users/shared
 in_root chown -h votv:cdrive /users/votv 2>/dev/null || true
-if [ "$OFFLINE" != 1 ]; then
-    say "downloading GE-Proton for the game (LSIW runners; Wine stays the fallback)"
-    in_root runuser -u votv -- env HOME=/var/lib/votv lsiw runners install ge || say "WARNING: GE-Proton download failed; the game uses Wine"
+if [ "$OFFLINE" != 1 ] && [ ! -x "$ROOT/usr/share/totv/proton/current/proton" ]; then
+    say "installing GE-Proton for the game (/usr/share/totv/proton; Wine stays the fallback)"
+    "$HERE/bin/votv-os-proton" install --root "${ROOT:-/}" || say "WARNING: GE-Proton download failed; the game uses Wine"
 fi
 
 # 5. Shimloader --------------------------------------------------------------------------------

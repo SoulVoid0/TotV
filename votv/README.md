@@ -19,6 +19,7 @@ the `votv` system user, and every change to the game is made through the **TotVO
 | **VotV PC** | the game's own PC (every tab) mirrored and driven from the KDE desktop |
 | Inventory on a second monitor | with 2+ monitors the inventory opens full-screen on the second one |
 | Performance | only settings that change no pixel: threaded GC destruction, no forced GC after streaming, VRAM-bounded streaming, parallel animation, PSO cache, DXVK state cache, gamemode, fsync; while the KDE desktop covers the game the hidden 3D view renders at reduced cost; r2modman does not run while you play |
+| **TotV Logs** | the game's, the mod's (UE4SS), the shell's, the installer's, the updater's and the system's logs, live; a game that stops three times shows the end of its log |
 | System resources | the game and r2modman run as `votv` in `totv-core.slice`: System Monitor lists them as system processes |
 
 **Meta+Esc** leaves the in-game PC (or let the game close it as usual).
@@ -43,7 +44,8 @@ votv/
     bin/votv-os-session          the shell: kwin_wayland on the screens, socket /run/totv/shell/wayland-0
     bin/votv-os-session-main     bridge + login screen + inventory + the game (kept running)
     bin/votv-pc-session          a user's KDE desktop on the in-game PC (nested KWin + plasmashell)
-    bin/votv-os-launch-game      LSIW (GE-Proton, else Wine) + the r2modman profile's shimloader folders
+    bin/votv-os-launch-game      GE-Proton in the game's own prefix (C:\users = /users/shared), else LSIW's Wine; the r2modman profile's shimloader folders
+    bin/votv-os-proton           GE-Proton in /usr/share/totv/proton (install / update)
     bin/votv-os-game             download Voices of the Void (itch.io) / update it
     bin/votv-os-install-game     install a build into /.VotV/<version>, add shimloader
     bin/votv-os-r2modman         install / update r2modman, seed its profile, run it
@@ -103,7 +105,7 @@ both are read live. Defaults: `host/lib/votvos/config.py`, `mod/TotVOS/Scripts/c
 | `home.base_mode` | `1` | the game mode under Home (1 Infinite, 3 Custom, 4 Sandbox) |
 | `home.realtime`, `home.no_needs`, `home.power_always_on` | `true` | the Home rules |
 | `mods.profile` | `Default` | the r2modman profile the game loads |
-| `game.engine` | `auto` | `auto` (GE-Proton if LSIW has it, else Wine), `wine`, `proton`, `proton:VERSION` |
+| `game.engine` | `auto` | `auto` (GE-Proton in the game's prefix if installed, else LSIW's Wine), `proton`, `proton:<GE-Proton tag>`, `wine` |
 | `game.follow_latest` | `false` | `totv-update` installs new game builds |
 | `pc.replace_ingame_ui`, `pc.ingame_fps`, `pc.ingame_width` | `true`, `2`, `1024` | the in-game screen picture |
 | `pc.align_camera`, `pc.blend`, `pc.overlay_delay`, `pc.camera.*` | | camera alignment |

@@ -40,6 +40,12 @@ With *autologin* (installer option) step 2 happens by itself once `default` has 
    and unpacked. Without an image and with a network it installs from packages instead.
 5. Remove the stick and reboot.
 
+The installer's screen lists every step (`[ok]` done, `[x]` failed), with a bar for the
+current step (MiB downloaded or checked, % unpacked), a bar for all steps, and the newest
+lines of `/var/log/totv-install.log`; a failure shows the end of the log. The merged system
+ISO also works as a (virtual) DVD drive. In a VM, the last screen says to remove the
+installer ISO and turn Secure Boot off; on UEFI machines a firmware entry "TotV" is added.
+
 `totv-install --answers FILE` installs unattended (`totv-install --help`).
 The installed disk boots on BIOS and UEFI computers and keeps every driver in its
 initramfs, so a TotV USB stick boots on other computers too.
@@ -92,11 +98,15 @@ carries one patch (`packages/lsiw/0001-cdrive-at-linux-root.patch`): when C: is 
 it would otherwise replace `/bin`, `/lib`, ... with links to themselves), and
 `lsiw cdrive set/reset` refuses to move the drive.
 
-The game runs as `votv`, whose own LSIW file sets `[steam] full_c_drive = false`: its
-Proton prefix keeps a C: of its own, so Proton's `C:\users\steamuser` is never
-`/users/steamuser` (which is the installed user's home, for that user's own Proton
-programs). The game reaches the system through `Z:\` (= `/` in every Wine and Proton
-prefix).
+The game runs as `votv` with **GE-Proton** (`/usr/share/totv/proton/current`, kept up to
+date by `totv-update`) in a **prefix of its own**, `/var/lib/votv/prefix`. Its `C:` mirrors
+LSIW's `C:` = `/` (every top-level folder of `/` is linked into it, so `C:\etc\hosts` is
+`/etc/hosts`), except `C:\users`, which is **`/users/shared`** (the game user's profiles:
+`steamuser`, AppData, the saves link), and Wine's own `C:\windows` and program folders.
+So Proton never writes into a person's `/users/<name>`, and `/users/steamuser` stays the
+installed user's profile for their own Proton programs through LSIW. The game reaches the
+system through `Z:\` (= `/` in every prefix). `game.engine = wine` in
+`/etc/totv/votv.json` runs it with LSIW's Wine instead.
 
 ## Build
 

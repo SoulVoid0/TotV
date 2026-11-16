@@ -29,7 +29,7 @@ jobs:
           shellcheck -S warning votv/host/install.sh votv/host/update.d/50-votv votv/host/bin/votv-os-session \
             votv/host/bin/votv-os-session-main votv/host/bin/votv-pc-session votv/host/bin/votv-pc-desktop \
             votv/host/bin/votv-os-launch-game votv/host/bin/votv-os-install-game votv/host/bin/votv-os-fetch-deps \
-            votv/host/bin/votv-os-r2modman votv/mod/package.sh os/build.sh os/system/build-system.sh \
+            votv/host/bin/votv-os-r2modman votv/host/bin/votv-os-proton votv/mod/package.sh os/build.sh os/system/build-system.sh \
             os/iso/airootfs/usr/local/bin/totv-install os/packages/totv-base/totv-update os/packages/totv-base/totv-adduser \
             tools/write-usb.sh
           python3 -m pyflakes votv/host/bin/votv-os-game votv/host/bin/votv-wayland-socket
