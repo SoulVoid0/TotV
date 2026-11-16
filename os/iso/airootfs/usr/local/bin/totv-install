@@ -366,8 +366,48 @@ do_mount() {
 
 # The system image: merged (when in parts) into a file on the target disk, checked,
 # and unpacked into the target root.
+# Progress of the long phases, on the installer's screen (the step's output goes to the log).
+show() {   # MESSAGE PERCENT
+    log "progress $2%: ${1//$'\n'/ }"
+    ((INTERACTIVE)) || return 0
+    dialog --backtitle "$TITLE" --title "Installing the system" --gauge "$1" 11 74 "$2" </dev/null >/dev/tty 2>&1 || true
+}
+mib() { echo $(($1 / 1048576)); }
+
+# Waits for PID, showing DONE_CMD's output (bytes done) against TOTAL between LO% and HI%.
+track() {   # PID TOTAL LO HI MESSAGE DONE_CMD...
+    local pid=$1 total=$2 lo=$3 hi=$4 msg=$5 done_b; shift 5
+    while kill -0 "$pid" 2>/dev/null; do
+        done_b=$("$@" 2>/dev/null || echo 0)
+        ((done_b > total)) && done_b=$total
+        show "$msg\n\n$(mib "$done_b") of $(mib "$total") MiB" $((lo + (hi - lo) * done_b / (total > 0 ? total : 1)))
+        sleep 2
+    done
+    wait "$pid"
+}
+size_of() { stat -c %s "$1" 2>/dev/null || echo 0; }
+
+# Bytes a process has read so far from a list of files it reads in order (sha256sum of the parts).
+read_pos() {   # PID FILE...
+    local pid=$1 f fd pos=0 target; shift
+    for fd in /proc/"$pid"/fd/*; do
+        target=$(readlink "$fd" 2>/dev/null) || continue
+        for f in "$@"; do
+            [[ $target == "$f" ]] || continue
+            pos=$(awk '/^pos:/ {print $2}' "/proc/$pid/fdinfo/${fd##*/}" 2>/dev/null || echo 0)
+            local before=0 g
+            for g in "$@"; do [[ $g == "$f" ]] && break; before=$((before + $(size_of "$g"))); done
+            echo $((before + pos)); return 0
+        done
+    done
+    echo 0
+}
+
+# The system image: its parts are downloaded (or found on a drive), checked, and joined
+# without copying (a read-only device-mapper device over the parts; a merged file only if
+# that is unavailable). Prints the path of the image (a file or a block device).
 fetch_image() {
-    local dir="$TARGET/.totv-image" idx base name size sum kind
+    local dir="$TARGET/.totv-image" idx base kind size sum name
     mkdir -p "$dir"
     if [[ $IMAGE_KIND == iso ]]; then
         echo "$IMAGE"; return 0
@@ -380,51 +420,119 @@ fetch_image() {
         base=$(dirname "$IMAGE")
     fi
     idx="$dir/index"
-    local whole_name whole_size whole_sum out
+    local whole_name whole_size whole_sum
     read -r kind whole_size whole_sum whole_name < <(grep '^image ' "$idx")
     [[ $kind == image && -n $whole_name ]] || die "the image index $IMAGE is not valid"
-    out="$dir/$whole_name"
-    : >"$out"
-    local n=0 total
+    local parts=() sizes=() sums=() total n=0 got=0
     total=$(grep -c '^part ' "$idx")
     while read -r kind size sum name; do
         [[ $kind == part ]] || continue
-        n=$((n + 1))
         [[ $name =~ ^[A-Za-z0-9._-]+$ ]] || die "bad part name in the index: $name"
-        local src="$dir/$name"
+        n=$((n + 1))
+        local src="$base/$name"
         if [[ $IMAGE_KIND == remote ]]; then
-            log "downloading part $n/$total: $name"
-            curl -fL --retry 5 --retry-delay 5 -C - -o "$src" "$base/$name" >>"$LOG" 2>&1 \
-                || die "downloading $name failed; check the internet connection and start the installer again"
-        else
-            src="$base/$name"
-            [[ -r $src ]] || die "part $name of the system image is missing next to $(basename "$IMAGE")"
+            src="$dir/$name"
+            if [[ $(size_of "$src") != "$size" ]]; then
+                log "downloading part $n/$total: $name"
+                curl -fsL --retry 5 --retry-delay 5 -C - -o "$src" "$base/$name" >>"$LOG" 2>&1 &
+                track $! "$whole_size" 0 50 "Downloading the TotV system image (part $n of $total)" \
+                    bash -c 'echo $(( $1 + $(stat -c %s "$2" 2>/dev/null || echo 0) ))' _ "$got" "$src" \
+                    || die "downloading $name failed; check the internet connection and start the installer again"
+            fi
         fi
-        [[ $(stat -c %s "$src") == "$size" ]] || die "part $name has the wrong size (an incomplete copy or download?)"
-        log "checking part $n/$total"
-        [[ $(sha256sum "$src" | cut -d' ' -f1) == "$sum" ]] || die "part $name is damaged (SHA-256 mismatch); copy or download it again"
-        cat "$src" >>"$out"
-        [[ $IMAGE_KIND == remote ]] && rm -f "$src"
+        [[ -r $src ]] || die "part $name of the system image is missing next to $(basename "$IMAGE")"
+        [[ $(size_of "$src") == "$size" ]] || die "part $name has the wrong size (an incomplete copy or download?)"
+        parts+=("$src"); sizes+=("$size"); sums+=("$sum")
+        got=$((got + size))
     done <"$idx"
-    [[ $(stat -c %s "$out") == "$whole_size" ]] || die "the merged system image has the wrong size"
-    log "checking the merged image"
-    [[ $(sha256sum "$out" | cut -d' ' -f1) == "$whole_sum" ]] || die "the merged system image is damaged (SHA-256 mismatch)"
+    ((got == whole_size)) || die "the parts of the system image do not add up to its size"
+
+    # One pass over the parts: the SHA-256 of the whole image.
+    local sumfile="$dir/whole.sha256"
+    cat "${parts[@]}" | sha256sum >"$sumfile" &
+    local hpid=$!
+    sleep 1
+    local catpid
+    catpid=$(pgrep -n -x cat || true)
+    track "$hpid" "$whole_size" 50 65 "Checking the system image (SHA-256)" read_pos "${catpid:-0}" "${parts[@]}"
+    if [[ $(cut -d' ' -f1 "$sumfile") != "$whole_sum" ]]; then
+        local i bad=()
+        for i in "${!parts[@]}"; do
+            [[ $(sha256sum "${parts[$i]}" | cut -d' ' -f1) == "${sums[$i]}" ]] || bad+=("$(basename "${parts[$i]}")")
+        done
+        die "the system image is damaged (SHA-256 mismatch${bad:+ in ${bad[*]}}); copy or download it again"
+    fi
+    log "system image checked: $whole_sum"
+
+    # Joined without copying: loop devices over the parts, one linear device-mapper device.
+    if command -v dmsetup >/dev/null && ((${#parts[@]} > 1)); then
+        local table="" start=0 loopdev secs
+        for i in "${!parts[@]}"; do
+            loopdev=$(losetup -r -f --show "${parts[$i]}") || { table=""; break; }
+            secs=$(( sizes[i] / 512 ))
+            table+="$start $secs linear $loopdev 0"$'\n'
+            start=$((start + secs))
+        done
+        if [[ -n $table ]] && printf '%s' "$table" | dmsetup create --readonly totv-image >>"$LOG" 2>&1; then
+            echo /dev/mapper/totv-image
+            return 0
+        fi
+        log "device-mapper join failed; merging into one file"
+        dmsetup remove totv-image 2>/dev/null || true
+        losetup -j "${parts[0]}" >/dev/null 2>&1 && for i in "${!parts[@]}"; do losetup -j "${parts[$i]}" | cut -d: -f1 | xargs -r losetup -d; done
+    fi
+    if ((${#parts[@]} == 1)); then echo "${parts[0]}"; return 0; fi
+    local out="$dir/$whole_name"
+    cat "${parts[@]}" >"$out" &
+    track $! "$whole_size" 50 65 "Joining the parts of the system image" size_of "$out"
+    [[ $IMAGE_KIND == remote ]] && rm -f "${parts[@]}"
     echo "$out"
+}
+
+release_image() {
+    dmsetup remove totv-image 2>/dev/null || true
+    local l
+    for l in $(losetup -l -n -O NAME,BACK-FILE 2>/dev/null | awk -v d="$TARGET/.totv-image" 'index($2, d) == 1 {print $1}'); do
+        losetup -d "$l" 2>/dev/null || true
+    done
 }
 
 do_image() {
     local iso mnt=/run/totv-image
     iso=$(fetch_image)
+    [[ -n $iso ]] || die "the system image could not be prepared"
     mkdir -p "$mnt"
-    mount -o loop,ro "$iso" "$mnt"
-    [[ -f $mnt/totv-system/rootfs.sfs ]] || { umount "$mnt"; die "$(basename "$iso") is not a TotV system image"; }
+    if [[ -b $iso ]]; then mount -o ro "$iso" "$mnt"; else mount -o loop,ro "$iso" "$mnt"; fi
+    [[ -f $mnt/totv-system/rootfs.sfs ]] || { umount "$mnt"; release_image; die "$(basename "$iso") is not a TotV system image"; }
     log "manifest: $(cat "$mnt/totv-system/manifest.json" 2>/dev/null)"
-    unsquashfs -f -d "$TARGET" "$mnt/totv-system/rootfs.sfs" >>"$LOG" 2>&1
+    # Unpacking: unsquashfs -percentage prints one number per line.
+    show "Unpacking TotV (the OS, Voices of the Void, r2modman)" 65
+    # (Failures are collected with ||, so the installer's ERR trap does not fire mid-way.)
+    local status=0 pct
+    rm -f /run/totv-unsquashfs.rc
+    { rc=0; unsquashfs -percentage -f -d "$TARGET" "$mnt/totv-system/rootfs.sfs" 2>>"$LOG" || rc=$?; echo "rc=$rc"; } |
+        while read -r pct; do
+            case $pct in
+                rc=*) echo "${pct#rc=}" >/run/totv-unsquashfs.rc ;;
+                *[!0-9]*|'') ;;
+                *) show "Unpacking TotV (the OS, Voices of the Void, r2modman)\n\n$pct% unpacked" $((65 + pct * 34 / 100)) ;;
+            esac
+        done
+    status=$(cat /run/totv-unsquashfs.rc 2>/dev/null || echo 1)
+    if [[ $status != 0 ]]; then
+        log "unsquashfs -percentage failed ($status); unpacking without progress"
+        show "Unpacking TotV (the OS, Voices of the Void, r2modman)\n\nThis takes several minutes." 70
+        status=0
+        unsquashfs -f -d "$TARGET" "$mnt/totv-system/rootfs.sfs" >>"$LOG" 2>&1 || status=$?
+    fi
     umount "$mnt"
+    release_image
+    ((status == 0)) || die "unpacking the system image failed (see $LOG)"
     rm -rf "$TARGET/.totv-image"
     mkdir -p "$TARGET"/{proc,sys,dev,run,tmp}
     chmod 1777 "$TARGET/tmp"
     # Keys of this installation: pacman's keyring and the machine id.
+    show "Setting up the installation's keys" 99
     in_target systemd-machine-id-setup
     in_target pacman-key --init
     in_target pacman-key --populate archlinux
