@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=VotV Mods
+GenericName=Mods for Voices of the Void
+Comment=Download and install Thunderstore mods while the game runs; Apply mods restarts TotV with them
+Exec=votv-mods
+Icon=package-x-generic
+Categories=Game;
+StartupWMClass=votv-mods

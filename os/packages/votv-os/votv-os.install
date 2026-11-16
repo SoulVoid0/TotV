@@ -1,0 +1,14 @@
+post_install() {
+    systemd-sysusers votv-os.conf >/dev/null 2>&1 || true
+    systemd-tmpfiles --create votv-os.conf >/dev/null 2>&1 || true
+    echo "Voices of the Void integration installed. Set it up with: sudo /usr/share/votv-os/host/install.sh /"
+}
+
+post_upgrade() {
+    systemd-sysusers votv-os.conf >/dev/null 2>&1 || true
+    systemd-tmpfiles --create votv-os.conf >/dev/null 2>&1 || true
+    # The game picks the new TotVOS mod up at its next start (totv-update restarts it).
+    [ -d /run/totv/votv-os ] && touch /run/totv/votv-os/mod-updated
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    true
+}

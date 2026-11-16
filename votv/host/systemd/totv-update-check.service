@@ -1,0 +1,9 @@
+[Unit]
+Description=Check for TotV OS updates
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/usr/bin/totv-update --check >/run/totv/update-check 2>&1; echo "exit=$?" >>/run/totv/update-check; chmod 644 /run/totv/update-check'
+SuccessExitStatus=100

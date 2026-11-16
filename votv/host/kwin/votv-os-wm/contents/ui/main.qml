@@ -2,9 +2,11 @@
 // Asks votv-os-bridge (org.totv.VotvOS.WindowState) ten times a second where each
 // window belongs:
 //   the game          fullscreen on the primary monitor
-//   the PC desktop    (nested KWin running Plasma) over the game, fullscreen on the
-//                     primary monitor while the player uses the in-game PC; minimized
-//                     otherwise (it keeps running so the in-game screen stays live)
+//   the PC            the login screen (votv-login) while nobody is logged in, else the
+//                     user's desktop (nested KWin running Plasma): over the game,
+//                     fullscreen on the primary monitor while the player uses the in-game
+//                     PC; minimized otherwise (it keeps running so the in-game screen
+//                     stays live). The PC that is not current stays minimized.
 //   the inventory     fullscreen on the second monitor while the game's inventory is open
 // Meta+Esc leaves the in-game PC.
 import QtQuick
@@ -83,10 +85,17 @@ Item {
         const pcVisible = !!s.pc.visible;
         const invVisible = !!s.inventory.visible && invOut !== null;
         let game = null, pc = null, inv = null;
+        const others = (s.pc.others || []);
         const list = Workspace.windowList();
         for (let i = 0; i < list.length; ++i) {
             const w = list[i];
             if (!w.normalWindow) continue;
+            if (others.indexOf(w.pid) >= 0) {
+                w.keepAbove = false;
+                if (!w.minimized) w.minimized = true;
+                w.skipTaskbar = true;
+                continue;
+            }
             if (s.pc.pid && w.pid === s.pc.pid) pc = w;
             else if (s.inventory.pid && w.pid === s.inventory.pid) inv = w;
             else if (isGame(w, s.game.classes)) game = w;

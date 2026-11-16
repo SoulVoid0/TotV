@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=r2modman
+GenericName=Mod manager for Voices of the Void
+Comment=Install and manage Voices of the Void mods (part of TotV; mods are in /.VotV/r2modman)
+Exec=votv-os-ctl r2modman
+Icon=applications-games
+Categories=Game;
+StartupWMClass=r2modman

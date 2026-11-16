@@ -1,4 +1,5 @@
-# Packages of the installed TotV system (no desktop yet).
+# Base packages of the installed TotV system. The system image adds
+# votv/host/packages.x86_64 (KDE Plasma for the in-game PC, Wine, ...) and votv-os.
 # One per line; '#' starts a comment. build.sh bundles them (and their
 # dependencies) into the installer's offline repository.
 base
@@ -20,6 +21,9 @@ man-db
 man-pages
 bash-completion
 htop
+pacman-contrib
+wine
+squashfs-tools
 # TotV's own packages (built by build.sh)
 lsiw
 totv-base

@@ -1,8 +1,0 @@
-#!/usr/bin/python3
-import os
-import sys
-
-sys.path.insert(0, os.environ.get("VOTV_OS_PYTHON", "/usr/lib/votv-os/python"))
-from votvos.apps import inventory_main  # noqa: E402
-
-sys.exit(inventory_main())

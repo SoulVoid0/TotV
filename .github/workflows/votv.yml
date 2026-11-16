@@ -19,23 +19,28 @@ jobs:
       - name: Mod against mock UE4SS
         run: |
           T=$(mktemp -d)
-          printf 'USERNAME=alice\nSAVE_NAME="Alice"\n' > "$T/user.conf"
-          VOTV_OS_RUNTIME="$T" VOTV_OS_USERCONF="$T/user.conf" VOTV_OS_SYSCFG="$T/none.json" \
+          VOTV_OS_RUNTIME="$T" VOTV_OS_SAVES="$T" VOTV_OS_SYSCFG="$T/none.json" \
             lua5.4 votv/tests/lua/test_mod.lua votv/mod/TotVOS/Scripts
       - name: Host tests
         run: QT_QPA_PLATFORM=offscreen python3 -m unittest votv/tests/test_host.py
       - name: Lint
         run: |
           python3 -m pyflakes votv/host/lib votv/tests/test_host.py
-          shellcheck -S warning votv/host/install.sh votv/host/bin/votv-os-session votv/host/bin/votv-os-session-main \
-            votv/host/bin/votv-pc-session votv/host/bin/votv-pc-desktop votv/host/bin/votv-os-launch-game \
-            votv/host/bin/votv-os-install-game votv/host/bin/votv-os-fetch-deps votv/host/session.d/*.sh votv/mod/package.sh
-      - name: Install hook into an empty root
+          shellcheck -S warning votv/host/install.sh votv/host/update.d/50-votv votv/host/bin/votv-os-session \
+            votv/host/bin/votv-os-session-main votv/host/bin/votv-pc-session votv/host/bin/votv-pc-desktop \
+            votv/host/bin/votv-os-launch-game votv/host/bin/votv-os-install-game votv/host/bin/votv-os-fetch-deps \
+            votv/host/bin/votv-os-r2modman votv/mod/package.sh os/build.sh os/system/build-system.sh \
+            os/iso/airootfs/usr/local/bin/totv-install os/packages/totv-base/totv-update os/packages/totv-base/totv-adduser \
+            tools/write-usb.sh
+          python3 -m pyflakes votv/host/bin/votv-os-game votv/host/bin/votv-wayland-socket
+      - name: Package files into an empty root
         run: |
           R=$(mktemp -d)
-          VOTV_SKIP_PACKAGES=1 TOTV_OFFLINE=1 bash votv/host/install.sh "$R"
+          bash votv/host/install.sh --files-only "$R"
           test -f "$R/usr/lib/votv-os/mods/TotVOS/Scripts/main.lua"
           test -f "$R/usr/share/kwin/scripts/votv-os-wm/metadata.json"
+          test -f "$R/usr/lib/systemd/system/totv-shell.service"
+          for b in votv-saves votv-mods votv-os-ctl totvd votv-login; do python3 -m py_compile "$R/usr/bin/$b"; done
       - name: Thunderstore package
         run: bash votv/mod/package.sh "$RUNNER_TEMP/dist"
       - uses: actions/upload-artifact@v4

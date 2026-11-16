@@ -1,50 +1,102 @@
 #!/bin/bash
-# Start Voices of the Void 0.9.0n through LSIW (Proton, else Wine) with shimloader
-# loading the TotVOS mod. C:\ is / under TotV OS, so every path below is the Linux
-# path written the Windows way.
+# Start Voices of the Void (/.VotV/current -> /.VotV/<version>) through LSIW with the
+# r2modman profile's shimloader folders, so the TotVOS mod and every mod installed with
+# r2modman load. Runs as the votv system user in the TotV shell. C:\ is / under TotV OS,
+# so every path below is the Linux path written the Windows way.
+#
+# Engine: GE-Proton when LSIW has it (`lsiw runners install ge`, done when the system
+# image is built), otherwise the system Wine, which TotV always installs. VOTV_ENGINE
+# overrides (wine, proton, proton:VERSION, wine:VERSION).
 set -u
 
-GAME_DIR="${VOTV_GAME_DIR:-/opt/votv}"
+VOTV_ROOT="${VOTV_ROOT:-/.VotV}"
+GAME_DIR="${VOTV_GAME_DIR:-$VOTV_ROOT/current}"
 LIB=/usr/lib/votv-os
-RT="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/votv-os"
-win() { printf 'C:%s' "$1" | tr '/' '\\'; }
+RT="${VOTV_OS_RUNTIME_LINUX:-/run/totv/votv-os}"
+win() { printf 'Z:%s' "$1" | tr '/' '\\'; }
+cfg() { python3 - "$1" "$2" <<'PYEOF'
+import json, sys
+v = None
+for p in ("/etc/totv/votv.json",):
+    try:
+        d = json.load(open(p))
+        for k in sys.argv[1].split("."):
+            d = d[k]
+        v = d
+    except Exception:
+        pass
+print(v if v is not None else sys.argv[2])
+PYEOF
+}
 
-exe=$(find "$GAME_DIR" -maxdepth 5 -type f -iname 'VotV-Win64-Shipping.exe' -print -quit)
+exe=$(find -L "$GAME_DIR" -maxdepth 5 -type f -iname 'VotV-Win64-Shipping.exe' -print -quit 2>/dev/null)
 if [ -z "$exe" ]; then
     echo "votv-os-launch-game: VotV-Win64-Shipping.exe not found under $GAME_DIR" >&2
-    command -v kdialog >/dev/null && kdialog --error "Voices of the Void is not installed in $GAME_DIR.\nRun: sudo votv-os-install-game /path/to/votv-0.9.0n.zip"
+    command -v kdialog >/dev/null && kdialog --error "Voices of the Void is not installed in $GAME_DIR.\nIt is part of TotV; reinstall it with:\n  sudo votv-os-game install\n(or: sudo votv-os-install-game /path/to/votv.zip)"
     exit 127
 fi
 win64=$(dirname "$exe")
-if [ ! -f "$win64/dwmapi.dll" ] || [ ! -f "$win64/UE4SS.dll" ]; then
-    echo "votv-os-launch-game: shimloader is missing from $win64" >&2
+if [ ! -f "$win64/dwmapi.dll" ]; then
+    echo "votv-os-launch-game: shimloader is missing from $win64 (sudo votv-os-install-game --shimloader-only)" >&2
     exit 126
 fi
 
-# Invisible engine settings (see perf.lua for the runtime part).
-localappdata=$(lsiw config get --linux LOCALAPPDATA 2>/dev/null || true)
-[ -n "$localappdata" ] && "$LIB/votv-os-engine-ini" "$localappdata/VotV/Saved/Config/WindowsNoEditor/Engine.ini" || true
+# The r2modman profile the game runs with (its shimloader folders), with TotVOS in it.
+profile=$(cfg mods.profile Default)
+PROFILE="$VOTV_ROOT/r2modman/r2modmanPlus-local/VotV/profiles/$profile"
+[ -d "$PROFILE" ] || PROFILE="$VOTV_ROOT/r2modman/r2modmanPlus-local/VotV/profiles/Default"
+mkdir -p "$PROFILE/shimloader/mod" "$PROFILE/shimloader/pak" "$PROFILE/shimloader/cfg" "$PROFILE/shimloader/overlay"
+# (shimloader: <mod-dir>/<Owner-Name>/Scripts/main.lua, as r2modman installs a package's mod/)
+if [ ! -e "$PROFILE/shimloader/mod/TotV-TotVOS/Scripts/main.lua" ]; then
+    rm -rf "$PROFILE/shimloader/mod/TotV-TotVOS"
+    ln -sfn "$LIB/mods/TotVOS" "$PROFILE/shimloader/mod/TotV-TotVOS"
+fi
 
-VOTV_OS_RUNTIME=$(win "$RT")
-VOTV_OS_USERCFG=$(win "${XDG_CONFIG_HOME:-$HOME/.config}/totv/votv.json")
-export VOTV_OS_RUNTIME VOTV_OS_USERCFG
-export VOTV_OS_SYSCFG='C:\etc\totv\votv.json'
-export VOTV_OS_USERCONF='C:\etc\totv\user.conf'
+# Saves: the game's SaveGames folder is /.VotV/saves/games (every user's saves), under
+# Wine (LSIW's LOCALAPPDATA) and under Proton (the shared prefix's steamuser) alike.
+link_saves() {   # $1: a LOCALAPPDATA folder
+    local sg="$1/VotV/Saved/SaveGames"
+    mkdir -p "$(dirname "$sg")" "$VOTV_ROOT/saves/games" || return 0
+    if [ -d "$sg" ] && [ ! -L "$sg" ]; then
+        cp -an "$sg"/. "$VOTV_ROOT/saves/games/" 2>/dev/null
+        rm -rf "$sg"
+    fi
+    [ -L "$sg" ] || ln -sfn "$VOTV_ROOT/saves/games" "$sg"
+    # Invisible engine settings (see perf.lua for the runtime part).
+    "$LIB/votv-os-engine-ini" "$1/VotV/Saved/Config/WindowsNoEditor/Engine.ini" || true
+}
+localappdata=$(lsiw config get --linux LOCALAPPDATA 2>/dev/null || true)
+[ -n "$localappdata" ] && link_saves "$localappdata"
+link_saves "$HOME/.local/share/lsiw/shared/pfx/drive_c/users/steamuser/AppData/Local"
+
+export VOTV_OS_RUNTIME; VOTV_OS_RUNTIME=$(win "$RT")
+export VOTV_OS_SAVES; VOTV_OS_SAVES=$(win "$VOTV_ROOT/saves")
+export VOTV_OS_USERCFG_DIR; VOTV_OS_USERCFG_DIR=$(win "$VOTV_ROOT/config")
+export VOTV_OS_SYSCFG='Z:\etc\totv\votv.json'
 export WINEDLLOVERRIDES="dwmapi=n,b${WINEDLLOVERRIDES:+;$WINEDLLOVERRIDES}"
 export WINEFSYNC=1 WINEESYNC=1
+export WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER=1   # in-game TVs play their videos under Proton/Wine
 export DXVK_CONFIG_FILE="$LIB/dxvk.conf"
 export DXVK_STATE_CACHE_PATH="${XDG_CACHE_HOME:-$HOME/.cache}/votv-os/dxvk"
 export __GL_SHADER_DISK_CACHE_SIZE=2147483648 MESA_SHADER_CACHE_MAX_SIZE=2G
+# The game is part of the system (totv-core.slice, the votv user), not a desktop app.
+export LSIW_NO_IDENTITY=1
 mkdir -p "$DXVK_STATE_CACHE_PATH"
 
-engine="${VOTV_ENGINE:-}"
-if [ -z "$engine" ]; then
+engine="${VOTV_ENGINE:-$(cfg game.engine auto)}"
+if [ "$engine" = auto ]; then
     if lsiw runners 2>/dev/null | grep -qi proton; then engine=proton; else engine=wine; fi
 fi
+if [ "$engine" = wine ] && ! command -v wine >/dev/null; then
+    echo "votv-os-launch-game: Wine is missing (it is part of TotV: sudo pacman -S wine)" >&2
+    exit 125
+fi
 
-args=(--mod-dir "$(win "$LIB/mods")" --pak-dir "$(win "$LIB/paks")" --cfg-dir "$(win "$LIB/cfg")")
+args=(--mod-dir "$(win "$PROFILE/shimloader/mod")" --pak-dir "$(win "$PROFILE/shimloader/pak")"
+      --cfg-dir "$(win "$PROFILE/shimloader/cfg")" --overlay-dir "$(win "$PROFILE/shimloader/overlay")")
 runner=()
 command -v gamemoderun >/dev/null && runner=(gamemoderun)
 
+echo "votv-os-launch-game: $exe engine=$engine profile=$PROFILE"
 cd "$win64" || exit 1
 exec "${runner[@]}" lsiw run -e "$engine" "$exe" "${args[@]}" "$@"

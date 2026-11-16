@@ -26,3 +26,18 @@ mesa
 noto-fonts
 unzip
 7zip
+# Wine is required: LSIW runs Voices of the Void with it (or with GE-Proton, downloaded by LSIW)
+wine
+wine-mono
+wine-gecko
+winetricks
+lib32-vulkan-icd-loader
+lib32-vulkan-radeon
+lib32-vulkan-intel
+lib32-mesa
+lib32-pipewire
+lib32-gnutls
+python-yaml
+squashfs-tools
+curl
+plasma-systemmonitor

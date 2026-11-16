@@ -1,0 +1,19 @@
+#!/bin/bash
+# totv-adduser NAME: another person on this TotV system (sudo totv-adduser NAME). They log
+# in on the in-game PC and get their own Voices of the Void save, named after them.
+#   --admin    also an administrator (group wheel: sudo, TotV updates)
+set -euo pipefail
+admin=0
+[ "${1:-}" = --admin ] && { admin=1; shift; }
+name="${1:?usage: totv-adduser [--admin] NAME}"
+[[ $name =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo "invalid user name '$name'" >&2; exit 2; }
+((EUID == 0)) || exec sudo "$0" "$@"
+groups=cdrive
+getent group votv >/dev/null && groups+=",votv"
+getent group gamemode >/dev/null && groups+=",gamemode"
+((admin)) && groups+=",wheel"
+useradd -m -G "$groups" -s /bin/bash "$name"
+passwd "$name"
+ln -sfn "/home/$name" "/users/$name"
+chown -h "$name:cdrive" "/users/$name"
+echo "$name can now log in on the in-game PC."

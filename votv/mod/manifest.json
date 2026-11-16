@@ -1,7 +1,7 @@
 {
     "name": "TotVOS",
-    "version_number": "1.0.0",
+    "version_number": "2.0.0",
     "website_url": "https://github.com/SoulVoid0/TotV",
-    "description": "TotV OS integration: boot into your save, the station PC is a KDE Plasma desktop, second-screen inventory.",
+    "description": "TotV OS integration: no main menu (the OS picks the save), the Home game mode, the station PC is a KDE Plasma desktop, second-screen inventory.",
     "dependencies": ["Thunderstore-unreal_shimloader-1.1.7"]
 }

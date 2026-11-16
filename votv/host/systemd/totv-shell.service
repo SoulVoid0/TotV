@@ -1,0 +1,36 @@
+# The TotV shell: Voices of the Void on the real screens from boot, in the shared
+# "default" Home save, with the login screen on the in-game PC. Runs as the votv system
+# user: the game and r2modman are part of the system (totv-core.slice).
+[Unit]
+Description=TotV shell (Voices of the Void)
+After=systemd-user-sessions.service plymouth-quit-wait.service totvd.service
+Wants=totvd.service
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
+[Service]
+User=votv
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+Environment=XDG_SESSION_TYPE=wayland TOTV_SHELL_DIR=/run/totv/shell VOTV_OS_RUNTIME_LINUX=/run/totv/votv-os
+RuntimeDirectory=totv/shell
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=no
+Slice=totv-core.slice
+OOMScoreAdjust=-300
+ExecStartPre=+/usr/bin/chgrp votv /run/totv/shell
+ExecStart=/usr/bin/votv-os-session
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target
+Alias=display-manager.service

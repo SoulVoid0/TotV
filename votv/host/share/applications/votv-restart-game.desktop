@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Restart Voices of the Void
+Comment=Restart the game (applies mod changes made in r2modman)
+Exec=votv-os-ctl restart-game
+Icon=view-refresh
+Categories=Game;

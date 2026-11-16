@@ -1,0 +1,8 @@
+[Unit]
+Description=Update TotV OS (packages, Voices of the Void, r2modman)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'exec /usr/bin/totv-update --yes >/var/log/totv-update.log 2>&1'

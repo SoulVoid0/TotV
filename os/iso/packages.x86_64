@@ -9,3 +9,7 @@ grub
 efibootmgr
 p7zip
 unzip
+squashfs-tools
+exfatprogs
+ntfs-3g
+curl

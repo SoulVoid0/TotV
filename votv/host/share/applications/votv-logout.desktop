@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Log out
+Comment=Log out of the in-game PC; the station goes back to the shared Home save
+Exec=votv-logout
+Icon=system-log-out
+Categories=System;

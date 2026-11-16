@@ -1,0 +1,24 @@
+#!/bin/sh
+# totv-update hook: Voices of the Void and r2modman (the OS packages, the TotVOS mod
+# included, come from pacman). `--check` exits 100 when something can be updated.
+# The game follows new builds only with "game": {"follow_latest": true} in
+# /etc/totv/votv.json: the TotVOS mod targets 0.9.0n. Old versions stay in /.VotV.
+set -u
+rc=0
+follow=$(python3 -c 'import json; print(json.load(open("/etc/totv/votv.json")).get("game", {}).get("follow_latest", False))' 2>/dev/null || echo False)
+if [ "${1:-}" = --check ]; then
+    if [ "$follow" = True ]; then votv-os-game update --check || [ $? -ne 100 ] || rc=100; fi
+    votv-os-r2modman update --check || [ $? -ne 100 ] || rc=100
+    exit "$rc"
+fi
+if [ "$follow" = True ]; then
+    old=$(readlink /.VotV/current || true)
+    votv-os-game update
+    [ "$(readlink /.VotV/current || true)" != "$old" ] && touch /run/totv/votv-os/restart-game
+fi
+votv-os-r2modman update
+votv-os-r2modman seed
+votv-os-install-game --shimloader-only 2>/dev/null || true
+# A new TotVOS mod (from pacman) loads at the next game start.
+[ -e /run/totv/votv-os/mod-updated ] && { rm -f /run/totv/votv-os/mod-updated; touch /run/totv/votv-os/restart-game; }
+exit 0

@@ -3,21 +3,22 @@
 #  - /etc/totv (installer settings) and totv-config to read them
 #  - session hooks on tty1 (/usr/lib/totv/session.d, /etc/totv/session.d)
 #  - branding (/etc/os-release), sudo for wheel, a portable initramfs
+#  - totv-update (in-place updates, /usr/lib/totv/update.d hooks), totv-adduser
 
 pkgname=totv-base
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='TotV operating system base configuration'
 arch=(any)
 url='https://github.com/SoulVoid0/TotV'
 license=(MIT)
-depends=(lsiw sudo systemd mkinitcpio)
+depends=(lsiw sudo systemd mkinitcpio pacman-contrib)
 backup=(etc/lsiw/lsiw.conf)
 install=totv-base.install
 source=(lsiw.conf sysusers.conf tmpfiles.conf os-release
         totv-apply-branding totv-branding.hook totv-config
-        totv-session.sh sudoers mkinitcpio.conf)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+        totv-session.sh sudoers mkinitcpio.conf totv-update totv-adduser)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
 
 package() {
   install -Dm644 lsiw.conf "$pkgdir/etc/lsiw/lsiw.conf"
@@ -29,6 +30,9 @@ package() {
   install -Dm755 totv-apply-branding "$pkgdir/usr/lib/totv/totv-apply-branding"
   install -Dm644 totv-branding.hook "$pkgdir/usr/share/libalpm/hooks/90-totv-branding.hook"
   install -Dm755 totv-config "$pkgdir/usr/bin/totv-config"
+  install -Dm755 totv-update "$pkgdir/usr/bin/totv-update"
+  install -Dm755 totv-adduser "$pkgdir/usr/bin/totv-adduser"
+  install -d "$pkgdir/usr/lib/totv/update.d"
   install -Dm644 totv-session.sh "$pkgdir/etc/profile.d/totv-session.sh"
   install -Dm440 sudoers "$pkgdir/etc/sudoers.d/10-totv-wheel"
   chmod 750 "$pkgdir/etc/sudoers.d"

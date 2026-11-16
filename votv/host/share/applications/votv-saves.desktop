@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=VotV Saves
+GenericName=Voices of the Void saves
+Comment=Create, rename, duplicate, delete and load your Voices of the Void saves
+Exec=votv-saves
+Icon=document-save
+Categories=Game;
+StartupWMClass=votv-saves

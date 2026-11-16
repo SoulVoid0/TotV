@@ -1,29 +1,28 @@
 #!/bin/bash
-# The KDE Plasma desktop that is the in-game PC: a nested kwin_wayland (a window of
-# the TotV OS compositor) running plasmashell, sized like the primary monitor, with
-# its own D-Bus session bus. The bridge captures it for the in-game screen and the
-# votv-os-wm KWin script shows it fullscreen while the player uses the PC.
+# A user's KDE Plasma desktop on the in-game PC (totv-desktop@<user>.service, after the
+# user logged in on the in-game login screen): a nested kwin_wayland, a window of the TotV
+# shell, sized like the primary monitor, with its own D-Bus session bus, running
+# plasmashell. Its Wayland socket is /run/totv/pc/<user>/wayland-0 (group votv), so
+# r2modman, which runs as the votv system user, opens its window on this desktop.
 set -u
 
-RT="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/votv-os"
-read -r W H < <(python3 - "$RT/screens.json" <<'EOF'
+RT="${VOTV_OS_RUNTIME_LINUX:-/run/totv/votv-os}"
+PCSOCK="/run/totv/pc/$(id -un)/wayland-0"
+export WAYLAND_DISPLAY="${TOTV_SHELL_WAYLAND:-/run/totv/shell/wayland-0}"
+export PULSE_SERVER="unix:${TOTV_SHELL_DIR:-/run/totv/shell}/pulse/native"
+read -r W H < <(python3 - "$RT/screens.json" <<'PYEOF'
 import json, sys
 try:
     s = json.load(open(sys.argv[1]))["screens"][0]
     print(int(s["w"] * s.get("scale", 1)), int(s["h"] * s.get("scale", 1)))
 except Exception:
     print(1920, 1080)
-EOF
+PYEOF
 )
 
-export KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1
-while :; do
-    dbus-run-session -- sh -c '
-        echo "$DBUS_SESSION_BUS_ADDRESS" > "$1/pc-session.bus"
-        echo $$ > "$1/pc-session.pid"
-        exec kwin_wayland --socket votv-pc --width "$2" --height "$3" --xwayland \
-             --no-lockscreen --exit-with-session=/usr/lib/votv-os/votv-pc-desktop
-    ' sh "$RT" "$W" "$H"
-    rm -f "$RT/pc-session.bus" "$RT/pc-session.pid"
-    sleep 2   # plasmashell or kwin crashed: bring the PC back
-done
+export KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1 TOTV_PC_WAYLAND="$PCSOCK"
+exec dbus-run-session -- sh -c '
+    echo $$ > "$1/pc-session.pid.tmp" && chmod 664 "$1/pc-session.pid.tmp" && mv -f "$1/pc-session.pid.tmp" "$1/pc-session.pid"
+    exec votv-wayland-socket "$4" 0660 -- kwin_wayland --width "$2" --height "$3" --xwayland \
+         --no-lockscreen --exit-with-session=/usr/lib/votv-os/votv-pc-desktop
+' sh "$RT" "$W" "$H" "$PCSOCK"

@@ -1,0 +1,26 @@
+#!/usr/bin/python3
+"""votv-wayland-socket PATH MODE -- COMMAND [ARGS...]
+
+Listen on a Wayland socket at an absolute PATH (so other users of group votv can be
+clients: the TotV shell for the users' PC desktops, a user's desktop for r2modman,
+which runs as the votv system user) and run COMMAND, a kwin_wayland, with
+`--wayland-fd N --socket NAME` added. Clients connect with WAYLAND_DISPLAY=PATH."""
+import os
+import socket
+import sys
+
+if len(sys.argv) < 5 or sys.argv[3] != "--":
+    print(__doc__, file=sys.stderr)
+    sys.exit(2)
+path, mode, cmd = sys.argv[1], int(sys.argv[2], 8), sys.argv[4:]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(path)
+os.chmod(path, mode)
+s.listen(128)
+s.set_inheritable(True)
+os.execvp(cmd[0], cmd + ["--wayland-fd", str(s.fileno()), "--socket", os.path.basename(path)])

@@ -1,5 +1,8 @@
 {
-  "autoload": { "enabled": true, "mode": 0 },
+  "saves": { "enabled": true, "save_before_switch": true, "hide_menu": true, "user_mode": "home" },
+  "home": { "base_mode": 1, "realtime": true, "no_needs": true, "power_always_on": true },
+  "mods": { "profile": "Default" },
+  "game": { "engine": "auto", "follow_latest": false },
   "pc": { "replace_ingame_ui": true, "ingame_fps": 2, "ingame_width": 1024, "align_camera": true },
   "inventory": { "second_screen": "auto" },
   "perf": { "enabled": true }

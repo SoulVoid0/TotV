@@ -1,0 +1,156 @@
+#!/bin/bash
+# r2modman on TotV OS: /.VotV/r2modman holds the app (app/) and all of its data
+# (r2modmanPlus-local/: profiles and mods; r2modman/: its settings), because it runs as
+# the votv system user with XDG_CONFIG_HOME=/.VotV/r2modman.
+#
+#   votv-os-r2modman install [--root R]   download the latest r2modman (GitHub releases)
+#   votv-os-r2modman seed [--root R]      the Voices of the Void profile "Default" with
+#                                         shimloader and the TotVOS mod in it
+#   votv-os-r2modman update               install a newer r2modman if there is one
+#   votv-os-r2modman run                  (totv-r2modman@<user>.service) start it
+set -euo pipefail
+
+cmd="${1:-}"; shift || true
+ROOT=/
+[ "${1:-}" = --root ] && { ROOT="$2"; shift 2; }
+R="${ROOT%/}"
+TOP="$R/.VotV/r2modman"
+APP="$TOP/app"
+DATA="$TOP/r2modmanPlus-local"
+PROFILE="$DATA/VotV/profiles/Default"
+REPO="${R2MODMAN_REPO:-ebkr/r2modmanPlus}"
+
+own() {
+    local ids
+    ids=$(awk -F: '$1=="votv"{print $3":"$4}' "$R/etc/passwd" 2>/dev/null)
+    [ -n "$ids" ] && chown -R "$ids" "$@"
+    return 0
+}
+
+latest_json() { curl -fsSL --retry 3 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/releases/latest"; }
+
+install_app() {
+    local json url ver tmp
+    json=$(latest_json)
+    ver=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"].lstrip("v"))' <<<"$json")
+    url=$(python3 -c '
+import json, sys
+assets = json.load(sys.stdin)["assets"]
+for want in (".AppImage",):
+    for a in assets:
+        n = a["name"]
+        if n.endswith(want) and "arm" not in n.lower() and "aarch64" not in n.lower():
+            print(a["browser_download_url"]); sys.exit()
+for a in assets:
+    if a["name"].endswith(".tar.gz") and "linux" in a["name"].lower():
+        print(a["browser_download_url"]); sys.exit()
+sys.exit("no Linux build of r2modman in the latest release")' <<<"$json")
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' RETURN
+    echo "downloading r2modman $ver ($url)"
+    curl -fL --retry 3 -o "$tmp/pkg" "$url"
+    mkdir -p "$tmp/x"
+    if [[ $url == *.AppImage ]]; then
+        chmod +x "$tmp/pkg"
+        (cd "$tmp/x" && "$tmp/pkg" --appimage-extract >/dev/null) || {
+            # No FUSE/exec in a chroot: the AppImage is a squashfs after its runtime.
+            off=$(grep -abo 'hsqs' "$tmp/pkg" | head -n1 | cut -d: -f1)
+            unsquashfs -q -d "$tmp/x/squashfs-root" -o "$off" "$tmp/pkg"
+        }
+        src="$tmp/x/squashfs-root"
+    else
+        tar -xzf "$tmp/pkg" -C "$tmp/x"
+        src=$(dirname "$(find "$tmp/x" -maxdepth 3 -type f -name r2modman -print -quit)")
+    fi
+    [ -x "$src/r2modman" ] || { echo "r2modman binary not found in the download" >&2; return 1; }
+    rm -rf "$APP.new"
+    mkdir -p "$TOP"
+    mv "$src" "$APP.new"
+    echo "$ver" > "$APP.new/.version"
+    rm -rf "$APP.old"; [ -e "$APP" ] && mv "$APP" "$APP.old"; mv "$APP.new" "$APP"; rm -rf "$APP.old"
+    own "$TOP"
+    echo "r2modman $ver installed in ${APP#"$R"}"
+}
+
+seed() {
+    mkdir -p "$PROFILE/shimloader/mod" "$PROFILE/shimloader/pak" "$PROFILE/shimloader/cfg" \
+             "$PROFILE/shimloader/overlay" "$TOP/launch"
+    # shimloader loads <mod-dir>/<Owner-Name>/Scripts/main.lua (r2modman's layout)
+    [ -L "$PROFILE/shimloader/mod/TotV-TotVOS" ] || rm -rf "$PROFILE/shimloader/mod/TotV-TotVOS"
+    ln -sfn /usr/lib/votv-os/mods/TotVOS "$PROFILE/shimloader/mod/TotV-TotVOS"
+    # r2modman starts the game as "VotV.exe" in the game folder you give it; on TotV that
+    # folder is /.VotV/r2modman/launch, where VotV.exe restarts the system's game with
+    # the profile (mods applied).
+    cat > "$TOP/launch/VotV.exe" <<'EOS'
+#!/bin/sh
+# r2modman's "Start modded" on TotV OS: the game is part of the system and always runs;
+# restart it so the profile's mods load.
+exec votv-os-ctl restart-game
+EOS
+    chmod 755 "$TOP/launch/VotV.exe"
+    if [ ! -s "$PROFILE/mods.yml" ]; then
+        local t; t=$(date +%s)000
+        cat > "$PROFILE/mods.yml" <<EOS
+- manifestVersion: 1
+  name: Thunderstore-unreal_shimloader
+  authorName: Thunderstore
+  websiteUrl: https://github.com/thunderstore-io/unreal-shimloader
+  displayName: unreal_shimloader
+  description: Installed by TotV OS (next to the game, in /.VotV/current).
+  gameVersion: "0"
+  networkMode: both
+  packageType: other
+  installMode: managed
+  installedAtTime: $t
+  loaders: []
+  dependencies: []
+  incompatibilities: []
+  optionalDependencies: []
+  versionNumber: {major: 1, minor: 1, patch: 7}
+  enabled: true
+  icon: ""
+- manifestVersion: 1
+  name: TotV-TotVOS
+  authorName: TotV
+  websiteUrl: https://github.com/SoulVoid0/TotV
+  displayName: TotVOS
+  description: TotV OS integration (part of the OS; updated with totv-update).
+  gameVersion: "0"
+  networkMode: both
+  packageType: other
+  installMode: managed
+  installedAtTime: $t
+  loaders: []
+  dependencies: [Thunderstore-unreal_shimloader-1.1.7]
+  incompatibilities: []
+  optionalDependencies: []
+  versionNumber: {major: 2, minor: 0, patch: 0}
+  enabled: true
+  icon: ""
+EOS
+    fi
+    own "$TOP"
+    # VotV Mods (run by the logged-in user) installs into the profile too: group votv.
+    chmod -R g+rwX "$TOP"
+    find "$TOP" -type d -exec chmod g+s {} +
+    echo "r2modman profile seeded: ${PROFILE#"$R"}"
+}
+
+case "$cmd" in
+    install) install_app ;;
+    seed) seed ;;
+    update)
+        cur=$(cat "$APP/.version" 2>/dev/null || echo 0)
+        new=$(latest_json | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"].lstrip("v"))') || { echo "r2modman: cannot check for updates"; exit 0; }
+        if [ "$cur" != "$new" ] && [ "$(printf '%s\n%s\n' "$cur" "$new" | sort -V | tail -n1)" = "$new" ]; then
+            [ "${1:-}" = --check ] && { echo "r2modman: $cur -> $new available"; exit 100; }
+            install_app
+        else
+            echo "r2modman $cur is the newest"
+        fi ;;
+    run)
+        [ -x "$APP/r2modman" ] || { kdialog --error "r2modman is not installed.\nsudo votv-os-r2modman install" 2>/dev/null; exit 1; }
+        export XDG_CONFIG_HOME="$TOP" PATH="$TOP/launch:$PATH" ELECTRON_OZONE_PLATFORM_HINT=wayland
+        exec "$APP/r2modman" --no-sandbox --ozone-platform=wayland --enable-features=UseOzonePlatform "$@" ;;
+    *) sed -n '2,12s/^# \{0,1\}//p' "$0"; exit 2 ;;
+esac

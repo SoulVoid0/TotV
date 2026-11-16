@@ -1,25 +1,24 @@
 #!/usr/bin/env bash
-# Builds the TotV packages and the TotV installer ISO.
+# Builds the TotV packages and the TotV installer ISO (which must stay under 2 GiB:
+# GitHub release assets cannot be larger). The full OS is the system image, built
+# afterwards by os/system/build-system.sh from out/repo.
 #
 #   sudo os/build.sh [--online] [--out DIR] [--work DIR]
 #
 # Needs Arch Linux (or an archlinux container run with --privileged) with
 # archiso and base-devel installed. Steps:
-#   1. build os/packages/* (lsiw, totv-base) with makepkg
-#   2. unless --online: download every package of the installed system
-#      (os/target-packages.x86_64, os/optional-packages.x86_64 and the
-#      extensions' packages.x86_64) with its dependencies, so the installer
-#      works without a network
+#   1. build os/packages/* (lsiw, totv-base, votv-os: the repository's votv/ folder is
+#      staged next to its PKGBUILD) with makepkg
+#   2. unless --online: download the base packages (os/target-packages.x86_64,
+#      os/optional-packages.x86_64) with their dependencies, so the installer's package
+#      fallback needs the network only for the desktop and the game
 #   3. make the "totv" repository of all of them
 #   4. take archiso's releng profile, add the TotV installer (os/iso) and the
-#      repository, and build the ISO with mkarchiso
-# Extensions: every <repo>/votv/host (and os/extensions/<name>) that has an
-# install.sh is copied into the ISO as /opt/totv/hooks/<name>; the installer
-# runs it after installing the base system (see os/README.md).
+#      repository, and build the ISO with mkarchiso; fail if it is 2 GiB or more
 #
 # Output in --out (default ./out): totv-<version>-x86_64.iso, SHA256SUMS and
 # repo/ (TotV's own packages as a pacman repository, published by CI as
-# release assets).
+# release assets: installed systems update from it with totv-update).
 #
 # SPDX-License-Identifier: MIT
 set -Eeuo pipefail
@@ -60,6 +59,8 @@ mkdir -p "$work" "$repo" "$out"
 msg "Building TotV packages"
 id "$builder" &>/dev/null || useradd -r -m -d /var/lib/$builder "$builder"
 cp -r "$here/packages" "$work/packages"
+cp -r "$top/votv" "$work/packages/votv-os/votv"
+rm -rf "$work/packages/votv-os/votv/host/vendor"
 chown -R "$builder:" "$work/packages"
 for dir in "$work"/packages/*/; do
     name=$(basename "$dir")
@@ -80,14 +81,6 @@ cp "$repo"/*.pkg.tar.zst "$own/"
 (cd "$own" && repo-add -q totv.db.tar.gz ./*.pkg.tar.zst)
 
 # ---------------------------------------------------------------------------
-# The extensions to put in the ISO.
-declare -A hooks=()
-[[ -f $top/votv/host/install.sh ]] && hooks[votv]=$top/votv/host
-for d in "$here"/extensions/*/; do
-    [[ -f $d/install.sh ]] && hooks[$(basename "$d")]=${d%/}
-done
-echo "extensions: ${!hooks[*]:-none}"
-
 list() { sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$@"; }
 
 if ((offline)); then
@@ -98,9 +91,6 @@ if ((offline)); then
     db=$work/download-db
     mkdir -p "$db"
     mapfile -t pkgs < <(list "$here/target-packages.x86_64" | grep -vxE 'lsiw|lsiw-control|totv-base')
-    for h in "${!hooks[@]}"; do
-        [[ -f ${hooks[$h]}/packages.x86_64 ]] && mapfile -t -O "${#pkgs[@]}" pkgs < <(list "${hooks[$h]}/packages.x86_64")
-    done
     # lsiw's dependencies come from the official repositories.
     pkgs+=(glibc hicolor-icon-theme)
     pacman --config "$conf" --dbpath "$db" -Syw --noconfirm --cachedir "$repo" "${pkgs[@]}"
@@ -128,22 +118,8 @@ mkdir -p "$profile/airootfs/etc/totv" "$profile/airootfs/opt/totv"
 echo "TOTV_VERSION=$version" >"$profile/airootfs/etc/totv-live-release"
 cp "$here/target-packages.x86_64" "$profile/airootfs/etc/totv/target-packages"
 cp "$here/optional-packages.x86_64" "$profile/airootfs/etc/totv/optional-packages"
+cp "$top/votv/host/packages.x86_64" "$profile/airootfs/etc/totv/votv-packages"
 cp -a "$repo" "$profile/airootfs/opt/totv/repo"
-for h in "${!hooks[@]}"; do
-    mkdir -p "$profile/airootfs/opt/totv/hooks"
-    cp -a "${hooks[$h]}" "$profile/airootfs/opt/totv/hooks/$h"
-done
-# The Voices of the Void extension: its mod files sit next to install.sh
-# (hooks/votv/mod), and an offline ISO also carries shimloader.
-if [[ -n ${hooks[votv]:-} ]]; then
-    vdir=$profile/airootfs/opt/totv/hooks/votv
-    [[ -d $top/votv/mod ]] && cp -a "$top/votv/mod" "$vdir/mod"
-    fetch=$top/votv/host/bin/votv-os-fetch-deps
-    if ((offline)) && [[ -f $fetch ]]; then
-        msg "Fetching shimloader for the votv extension"
-        bash "$fetch" "$vdir/vendor/shimloader"
-    fi
-fi
 
 # The installer's package sources: only the bundled repository (offline),
 # or the bundled repository first and then the Arch mirrors (online).
@@ -180,9 +156,6 @@ sed -i -e 's/^iso_name=.*/iso_name="totv"/' \
        -e 's/^iso_application=.*/iso_application="TotV installer"/' \
        -e "s/^iso_version=.*/iso_version=\"$version\"/" "$pd"
 echo 'file_permissions+=(["/usr/local/bin/totv-install"]="0:0:755")' >>"$pd"
-for h in "${!hooks[@]}"; do
-    echo "file_permissions+=([\"/opt/totv/hooks/$h/install.sh\"]=\"0:0:755\")" >>"$pd"
-done
 # Boot menu entries.
 grep -rlZ 'Arch Linux install medium' "$profile"/{efiboot,grub,syslinux} 2>/dev/null |
     xargs -0r sed -i 's/Arch Linux install medium/TotV installer/g' || true
@@ -193,6 +166,13 @@ mkarchiso -v -w "$work/archiso" -o "$work/iso" "$profile"
 iso=$(ls "$work"/iso/*.iso)
 final="$out/totv-$version-x86_64.iso"
 mv "$iso" "$final"
+size=$(stat -c %s "$final")
+limit=$((2 * 1024 * 1024 * 1024))
+if ((size >= limit)); then
+    echo "build.sh: the installer ISO is $size bytes, over GitHub's 2 GiB limit for release assets" >&2
+    exit 1
+fi
+echo "installer ISO: $((size / 1024 / 1024)) MiB (limit 2048 MiB)"
 rm -rf "$out/repo"
 cp -rL "$own" "$out/repo"   # -L: GitHub release assets cannot be symlinks
 (cd "$out" && sha256sum "$(basename "$final")" >SHA256SUMS)

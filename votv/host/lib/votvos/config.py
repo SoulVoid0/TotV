@@ -10,7 +10,11 @@ from . import paths
 from .ipc import write_atomic
 
 DEFAULTS: dict[str, Any] = {
-    "autoload": {"enabled": True, "mode": 0},
+    "saves": {"enabled": True, "save_before_switch": True, "hide_menu": True,
+              "user_mode": "home", "default_title": "default"},
+    "home": {"base_mode": 1, "realtime": True, "no_needs": True, "power_always_on": True},
+    "mods": {"profile": "Default"},
+    "game": {"follow_latest": False},
     "pc": {
         "replace_ingame_ui": True,
         "ingame_fps": 2,
@@ -46,10 +50,10 @@ def _load(path: Path) -> dict:
         return {}
 
 
-def effective() -> dict:
+def effective(user: str | None = None) -> dict:
     v = copy.deepcopy(DEFAULTS)
     merge(v, _load(paths.SYSTEM_CONFIG))
-    merge(v, _load(paths.user_config()))
+    merge(v, _load(paths.user_config(user)))
     return v
 
 
@@ -61,6 +65,10 @@ def save_user(data: dict) -> None:
     p = paths.user_config()
     p.parent.mkdir(parents=True, exist_ok=True)
     write_atomic(p, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode())
+    try:
+        p.chmod(0o644)   # the game runs as the votv system user and reads it
+    except OSError:
+        pass
 
 
 def set_user(path: str, value: Any) -> dict:

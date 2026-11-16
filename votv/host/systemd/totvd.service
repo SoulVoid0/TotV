@@ -1,0 +1,10 @@
+[Unit]
+Description=TotV system helper (logins on the in-game PC, r2modman, updates)
+Before=totv-shell.service
+
+[Service]
+ExecStart=/usr/bin/totvd
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

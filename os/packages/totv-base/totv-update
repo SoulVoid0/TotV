@@ -1,0 +1,57 @@
+#!/bin/bash
+# totv-update: update TotV OS in place; no reinstall, nothing of yours is touched.
+#
+#   totv-update            update (asks before installing; as root or with sudo)
+#   totv-update --yes      update without asking (totv-update.service, TotV Update app)
+#   totv-update --check    only check; exit 100 when updates are available
+#
+# 1. the packages: Arch Linux and TotV's own repository [totv] (lsiw, totv-base, votv-os
+#    with the TotVOS mod), which each TotV release on GitHub publishes;
+# 2. the hooks in /usr/lib/totv/update.d (votv-os: r2modman, and Voices of the Void when
+#    "game.follow_latest" is on), each run with the same option.
+# A new kernel needs a restart; the game restarts by itself when its mod or build changed.
+set -uo pipefail
+
+mode=update
+case "${1:-}" in
+    --check) mode=check ;;
+    --yes|-y) mode=yes ;;
+    '') ;;
+    -h|--help) sed -n '2,13s/^# \{0,1\}//p' "$0"; exit 0 ;;
+    *) echo "usage: totv-update [--check|--yes]" >&2; exit 2 ;;
+esac
+hooks() { for h in /usr/lib/totv/update.d/*; do [ -x "$h" ] && "$h"; done; return 0; }
+
+if [ "$mode" = check ]; then
+    rc=0
+    if command -v checkupdates >/dev/null; then
+        out=$(checkupdates 2>/dev/null); c=$?
+        if [ "$c" -eq 0 ] && [ -n "$out" ]; then
+            echo "Package updates:"; echo "$out"; rc=100
+        elif [ "$c" -ne 2 ] && [ "$c" -ne 0 ]; then
+            echo "could not check the package repositories (no network?)"
+        fi
+    fi
+    for h in /usr/lib/totv/update.d/*; do
+        [ -x "$h" ] || continue
+        "$h" --check; [ $? -eq 100 ] && rc=100
+    done
+    [ "$rc" = 0 ] && echo "TotV is up to date."
+    exit "$rc"
+fi
+
+((EUID == 0)) || exec sudo "$0" "$@"
+echo "== TotV update $(date -Is)"
+kernel_before=$(pacman -Q linux 2>/dev/null)
+args=(-Syu)
+[ "$mode" = yes ] && args+=(--noconfirm)
+# The keyring first, so a long-unupdated system can verify the rest.
+pacman -Sy --needed --noconfirm archlinux-keyring >/dev/null 2>&1 || true
+pacman "${args[@]}" || { echo "pacman failed"; exit 1; }
+hooks
+if [ "$(pacman -Q linux 2>/dev/null)" != "$kernel_before" ]; then
+    echo "A new kernel is installed: restart TotV to use it."
+    touch /run/totv/reboot-required 2>/dev/null || true
+fi
+. /etc/os-release 2>/dev/null
+echo "== done: ${PRETTY_NAME:-TotV} $(pacman -Q totv-base 2>/dev/null | cut -d' ' -f2)"

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=TotV login
+Exec=votv-login
+NoDisplay=true
+StartupWMClass=votv-login

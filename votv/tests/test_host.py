@@ -16,6 +16,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 TMP = tempfile.mkdtemp()
 os.environ["VOTV_OS_RUNTIME_LINUX"] = str(Path(TMP) / "rt")
 os.environ["XDG_CONFIG_HOME"] = str(Path(TMP) / "cfg")
+os.environ["VOTV_ROOT"] = str(Path(TMP) / "VotV")
+os.environ["VOTV_OS_SYSCFG_LINUX"] = str(Path(TMP) / "none.json")
 
 from votvos import config, ipc, paths  # noqa: E402
 
@@ -59,7 +61,8 @@ class ConfigTest(unittest.TestCase):
         eff = config.effective()
         self.assertEqual(eff["pc"]["camera"]["pitch"], 2.5)
         self.assertEqual(eff["pc"]["camera"]["yaw"], 0.0)
-        self.assertTrue(eff["autoload"]["enabled"])
+        self.assertTrue(eff["saves"]["enabled"])
+        self.assertEqual(eff["home"]["base_mode"], 1)
 
     def test_user_conf_parsing(self):
         p = Path(TMP) / "user.conf"
@@ -133,7 +136,98 @@ class QtTest(unittest.TestCase):
         self.assertIn("overlay_shown", cmds)
         self.assertEqual(cmds[-1], "leave_pc")
         b._events.stop()
-        b._frames.stop()
+        b._slow.stop()
+
+    def test_bridge_follows_login_and_logout(self):
+        from votvos.bridge import Bridge
+        from votvos.saves import Registry
+        rt = paths.runtime_dir()
+        (rt / "session.json").unlink(missing_ok=True)
+        (rt / "target.json").unlink(missing_ok=True)
+        b = Bridge(self.app)
+        reg = Registry(runtime=rt)
+        self.assertEqual(reg.running()["name"], "default")
+        self.assertEqual(reg.running()["mode"], "home")
+        (rt / "session.json").write_text('{"user": "alice"}')
+        b.follow_session()
+        self.assertEqual(reg.running()["name"], "alice")
+        self.assertEqual(reg.get("alice")["owner"], "alice")
+        (rt / "session.json").unlink()
+        b.follow_session()
+        self.assertEqual(reg.running()["name"], "default")
+        b._events.stop()
+        b._slow.stop()
+
+
+class SavesTest(unittest.TestCase):
+    def test_registry(self):
+        from votvos.saves import Registry, SaveError
+        d = Path(tempfile.mkdtemp())
+        reg = Registry(root=d / "saves", runtime=d)
+        reg.ensure_builtin("bob")
+        n = reg.create("bob", "My Station", "sandbox")
+        self.assertEqual(n, "bob-My Station")
+        self.assertEqual(reg.create("bob", "My Station", "story"), "bob-My Station 2")
+        self.assertNotIn(n, reg.for_user("eve"))
+        self.assertIn("default", reg.for_user("eve"))
+        with self.assertRaises(SaveError):
+            reg.delete("eve", n)
+        with self.assertRaises(SaveError):
+            reg.delete("bob", "bob")          # the user's own save stays
+        with self.assertRaises(SaveError):
+            reg.rename("bob", "default", "x")  # the shared one too
+        t = reg.load(n, "bob")
+        self.assertEqual((t["name"], t["mode"]), (n, "sandbox"))
+        with self.assertRaises(SaveError):
+            reg.delete("bob", n, running=n)
+        (d / "saves" / "prefixes.json").write_text('{"4": "sbx_"}')
+        (d / "saves" / "games").mkdir(parents=True, exist_ok=True)
+        (d / "saves" / "games" / f"sbx_{n}.sav").write_bytes(b"GVAS")
+        c = reg.duplicate("bob", n, "Copy")
+        self.assertTrue((d / "saves" / "games" / f"sbx_{c}.sav").exists())
+        reg.delete("bob", n)
+        self.assertNotIn(n, reg.all())
+        self.assertFalse((d / "saves" / "games" / f"sbx_{n}.sav").exists())
+
+
+class ModsTest(unittest.TestCase):
+    def test_install_routes_and_manifest(self):
+        import io
+        import zipfile
+        from votvos import mods
+        prof = Path(tempfile.mkdtemp())
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("manifest.json", "{}")
+            z.writestr("CoolMod/Scripts/main.lua", "print(1)")
+            z.writestr("CoolMod/enabled.txt", "")
+            z.writestr("pak/Cool_P.pak", "PAK")
+            z.writestr("cfg/cool.ini", "x=1")
+        payload = buf.getvalue()
+        index = [
+            {"full_name": "Ann-Cool", "owner": "Ann", "name": "Cool", "versions": [
+                {"version_number": "1.2.3", "dependencies": ["Thunderstore-unreal_shimloader-1.1.7", "Bo-Lib-0.1.0"],
+                 "download_url": "x"}]},
+            {"full_name": "Bo-Lib", "owner": "Bo", "name": "Lib", "versions": [
+                {"version_number": "0.1.0", "dependencies": [], "download_url": "y"}]},
+        ]
+        mods.download = lambda pkg, ver: payload
+        done = mods.install(index, "Ann-Cool", prof)
+        self.assertEqual(done, ["Bo-Lib-0.1.0", "Ann-Cool-1.2.3"])
+        self.assertTrue((prof / "shimloader/mod/Ann-Cool/CoolMod/Scripts/main.lua").exists())
+        self.assertTrue((prof / "shimloader/pak/Ann-Cool/Cool_P.pak").exists())
+        self.assertTrue((prof / "shimloader/cfg/cool.ini").exists())
+        inst = mods.installed(prof)
+        self.assertEqual(inst["Ann-Cool"]["versionNumber"], {"major": 1, "minor": 2, "patch": 3})
+        self.assertEqual(mods.plan(index, "Ann-Cool", prof), [])
+        self.assertIn("Ann-Cool-1.2.3", mods.pending(prof)["installed"])
+        with self.assertRaises(mods.ModError):
+            mods.uninstall("Bo-Lib", prof)   # Ann-Cool needs it
+        mods.uninstall("Ann-Cool", prof)
+        self.assertFalse((prof / "shimloader/mod/Ann-Cool").exists())
+        self.assertNotIn("Ann-Cool", mods.installed(prof))
+        with self.assertRaises(mods.ModError):
+            mods.uninstall("TotV-TotVOS", prof)
 
 
 if __name__ == "__main__":

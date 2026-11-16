@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TotV Update
+Comment=Update TotV OS, Voices of the Void and r2modman without reinstalling
+Exec=totv-updater
+Icon=system-software-update
+Categories=System;Settings;
+StartupWMClass=totv-updater

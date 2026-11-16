@@ -1,0 +1,15 @@
+# r2modman as a part of the system (the votv user, totv-core.slice), its window on the
+# KDE desktop of %i. Data: /.VotV/r2modman.
+[Unit]
+Description=r2modman for Voices of the Void (on the desktop of %i)
+After=totv-desktop@%i.service
+BindsTo=totv-desktop@%i.service
+
+[Service]
+User=votv
+Slice=totv-core.slice
+UMask=0002
+Environment=WAYLAND_DISPLAY=/run/totv/pc/%i/wayland-0 XDG_RUNTIME_DIR=/run/totv/r2modman
+Environment=VOTV_OS_RUNTIME_LINUX=/run/totv/votv-os
+RuntimeDirectory=totv/r2modman
+ExecStart=/usr/bin/votv-os-r2modman run

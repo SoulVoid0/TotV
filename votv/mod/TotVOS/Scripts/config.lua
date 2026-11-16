@@ -1,14 +1,20 @@
 -- Settings: built-in defaults, overlaid by the system file the OS installs
--- (C:\etc\totv\votv.json) and the user's file the calibration app writes
--- (VOTV_OS_USERCFG, normally C:\home\<user>\.config\totv\votv.json).
--- Re-read whenever either file changes, so calibration is live.
+-- (Z:\etc\totv\votv.json) and the logged-in user's file the calibration app
+-- writes (Z:\.VotV\config\<user>.json; the user comes from session.json in the
+-- runtime dir, which the bridge writes at login and removes at logout).
+-- Re-read whenever a file changes, so calibration is live.
 local U = require('util')
 local json = require('json')
 
 local C = {}
 
 local DEFAULTS = {
-    autoload = { enabled = true, mode = 0 },  -- mode: 0 Story, 1 Infinite, 3 Custom, 4 Sandbox
+    -- Which save runs is the host's choice (target.json); these say how to get there.
+    saves = { enabled = true, save_before_switch = true, hide_menu = true },
+    -- The Home game mode (TotV OS): a world on top of base_mode (0 Story, 1 Infinite,
+    -- 3 Custom, 4 Sandbox) with the real-life clock, no hunger or tiredness, and power
+    -- that never goes out.
+    home = { base_mode = 1, realtime = true, no_needs = true, power_always_on = true },
     pc = {
         replace_ingame_ui = true,   -- the in-game laptop shows the KDE desktop
         ingame_fps = 2,             -- texture refreshes per second while looking at it from afar
@@ -53,15 +59,34 @@ end
 
 -- '\\' in the game (UE4SS is a Windows build); '/' when the tests run on Linux.
 C.sep = package.config:sub(1, 1)
-C.runtime_dir = env('VOTV_OS_RUNTIME', 'C:\\run\\votv-os')
-C.system_file = env('VOTV_OS_SYSCFG', 'C:\\etc\\totv\\votv.json')
-C.user_file = env('VOTV_OS_USERCFG', nil)
-C.user_conf = env('VOTV_OS_USERCONF', 'C:\\etc\\totv\\user.conf')
+C.runtime_dir = env('VOTV_OS_RUNTIME', 'Z:\\run\\totv\\votv-os')
+C.system_file = env('VOTV_OS_SYSCFG', 'Z:\\etc\\totv\\votv.json')
+C.user_cfg_dir = env('VOTV_OS_USERCFG_DIR', 'Z:\\.VotV\\config')
+C.saves_dir = env('VOTV_OS_SAVES', 'Z:\\.VotV\\saves')
+C.fixed_user_file = env('VOTV_OS_USERCFG', nil)
+C.user_file = C.fixed_user_file
+
+-- The user logged in to the OS right now (nil: nobody, the shared Home save runs).
+function C.session_user()
+    local raw = U.read_file(C.runtime_dir .. C.sep .. 'session.json')
+    if not raw or raw == '' then return nil end
+    local t = json.decode(raw)
+    if type(t) == 'table' and type(t.user) == 'string' and t.user:match('^[%w_%-]+$') then return t.user end
+    return nil
+end
 
 local last_raw = {}
 
 function C.reload()
+    if not C.fixed_user_file then
+        local u = C.session_user()
+        C.user_file = u and (C.user_cfg_dir .. C.sep .. u .. '.json') or nil
+    end
     local changed = false
+    if C.user_file ~= last_raw.__user_file then
+        last_raw.__user_file = C.user_file
+        changed = true
+    end
     for _, path in ipairs({ C.system_file, C.user_file }) do
         if path then
             local raw = U.read_file(path) or ''
@@ -83,28 +108,6 @@ function C.reload()
     end
     C.values = v
     return true
-end
-
--- /etc/totv/user.conf is shell syntax (USERNAME=..., SAVE_NAME=...).
-function C.user_conf_values()
-    local raw = U.read_file(C.user_conf)
-    local out = {}
-    if not raw then return out end
-    for line in raw:gmatch('[^\r\n]+') do
-        local k, v = line:match('^%s*([%w_]+)%s*=%s*(.-)%s*$')
-        if k then
-            v = v:gsub('^"(.*)"$', '%1'):gsub("^'(.*)'$", '%1')
-            out[k] = v
-        end
-    end
-    return out
-end
-
-function C.save_name()
-    local env_name = os.getenv('VOTV_OS_SAVE_NAME')
-    if env_name and env_name ~= '' then return env_name end
-    local u = C.user_conf_values()
-    return u.SAVE_NAME or u.USERNAME
 end
 
 return C

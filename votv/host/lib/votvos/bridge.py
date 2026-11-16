@@ -1,34 +1,43 @@
 """votv-os-bridge: the host side of the TotV OS <-> Voices of the Void integration.
 
-* publishes the real monitors to the game (screens.json) so it knows when to move
-  the inventory to a second screen;
-* captures the KDE PC session for the in-game laptop screen (pc-frame.json + BMPs);
-* follows the game's events and decides which window the host compositor shows
-  where; the KWin script (kwin/votv-os-wm) asks for that state over D-Bus
-  (org.totv.VotvOS.WindowState) and binds Meta+Esc to LeavePC.
+Runs in the TotV shell (as the votv system user, next to the game) and:
+
+* publishes the real monitors to the game (screens.json), so it knows when to move the
+  inventory to a second screen;
+* decides which save runs (target.json, followed by the mod): the shared Home save
+  "default" at boot and while nobody is logged in, the user's own save (named after
+  the user) at login; the VotV Saves app can load any other;
+* follows the game's events and tells the KWin script (kwin/votv-os-wm) over D-Bus
+  (org.totv.VotvOS.WindowState) which window goes where: the game, the "PC" (the
+  greeter while nobody is logged in, else the user's KDE desktop) and the inventory.
+  Meta+Esc calls LeavePC.
+
+The in-game screen's frames come from whoever is the PC: the greeter draws its own
+(votv-login), a user's desktop is captured by votv-pc-agent in that session.
 """
 from __future__ import annotations
 
 import json
 import os
 import signal
+import socket
 import sys
 import time
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, QTimer, pyqtClassInfo, pyqtSlot
 from PyQt6.QtDBus import QDBusAbstractAdaptor, QDBusConnection
-from PyQt6.QtGui import QGuiApplication, QImage
+from PyQt6.QtGui import QGuiApplication
 
 from . import config, paths
-from .capture import NestedCapture, frame_digest
 from .ipc import GameLink, write_atomic
+from .saves import DEFAULT, Registry, current_session_user
 
 SERVICE = "org.totv.VotvOS"
 OBJECT = "/org/totv/VotvOS"
 
 
-def _read_pid(path: Path) -> int:
+def read_pid(path: Path) -> int:
     try:
         pid = int(path.read_text().strip())
         os.kill(pid, 0)
@@ -37,21 +46,40 @@ def _read_pid(path: Path) -> int:
         return 0
 
 
+def totvd(request: dict, timeout: float = 30.0) -> dict:
+    """One request to the TotV system helper (totvd, root) over its socket."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect(str(paths.LOGIN_SOCKET))
+            s.sendall((json.dumps(request) + "\n").encode())
+            buf = b""
+            while not buf.endswith(b"\n"):
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+        return json.loads(buf or b"{}")
+    except (OSError, ValueError) as e:
+        return {"ok": False, "error": f"the TotV system helper is not reachable ({e})"}
+
+
 class Bridge(QObject):
     def __init__(self, app: QGuiApplication):
         super().__init__()
         self.app = app
         self.rt = paths.runtime_dir()
         self.link = GameLink(self.rt)
-        self.capture = NestedCapture(self.rt / "pc-session.bus")
+        self.reg = Registry(runtime=self.rt)
         self.cfg = config.effective()
         self.pc_wanted = False         # the game says the player is at the PC
         self.pc_visible = False        # the KDE window covers the game
         self.inventory_open = False
         self.game_seen = 0.0
-        self.seq = 0
-        self.last_digest = b""
         self.cfg_mtime = 0.0
+        self.session_user: str | None = None
+        self.session_stamp = None
+        self.autologin_done = False
         self._pc_timer = QTimer(self, singleShot=True)
         self._pc_timer.timeout.connect(self._show_pc)
 
@@ -59,14 +87,15 @@ class Bridge(QObject):
         app.screenRemoved.connect(lambda *_: self.publish_screens())
         app.primaryScreenChanged.connect(lambda *_: self.publish_screens())
         self.publish_screens()
+        self.publish_state()
 
         self._events = QTimer(self, interval=40)
         self._events.timeout.connect(self.poll_events)
         self._events.start()
-        self._frames = QTimer(self, interval=100)
-        self._frames.timeout.connect(self.capture_tick)
-        self._frames.start()
-        self._last_capture = 0.0
+        self._slow = QTimer(self, interval=500)
+        self._slow.timeout.connect(self.slow_tick)
+        self._slow.start()
+        self.follow_session(force=True)
 
     # screens ------------------------------------------------------------------------
     def screens(self) -> list[dict]:
@@ -87,6 +116,49 @@ class Bridge(QObject):
         sc = self.screens()
         return sc[1]["name"] if len(sc) > 1 else ""
 
+    def publish_state(self) -> None:
+        """For the frame producers: no capture while the real desktop covers the game."""
+        self.link.write("bridge-state.json", {"pc_visible": self.pc_visible, "user": self.session_user})
+
+    # who is logged in, which save runs --------------------------------------------------
+    def follow_session(self, force: bool = False) -> None:
+        f = self.rt / "session.json"
+        try:
+            st = f.stat()
+            stamp = (st.st_ino, st.st_mtime_ns)
+        except OSError:
+            stamp = None
+        if stamp == self.session_stamp and not force:
+            return
+        self.session_stamp = stamp
+        user = current_session_user(self.rt)
+        if user == self.session_user and not force:
+            return
+        self.session_user = user
+        sv = self.cfg["saves"]
+        base = int(self.cfg["home"].get("base_mode", 1))
+        self.reg.ensure_builtin(user, sv.get("user_mode", "home"), base)
+        name = user or DEFAULT
+        running = self.reg.running()
+        # A restarted bridge keeps the save the game already runs.
+        if not (force and running and running.get("name") == name):
+            self.reg.load(name, None, by="login" if user else "logout")
+        # Leaving the PC of the previous user.
+        self.pc_wanted = False
+        self._set_pc_visible(False)
+        self.link.send("config_reload")
+        self.publish_state()
+
+    def maybe_autologin(self) -> None:
+        if self.autologin_done or self.session_user:
+            return
+        self.autologin_done = True
+        conf = paths.read_kv(paths.TOTV_CONF)
+        if conf.get("AUTOLOGIN") == "yes":
+            r = totvd({"op": "autologin"})
+            if not r.get("ok"):
+                print(f"votv-os-bridge: autologin: {r.get('error')}", file=sys.stderr)
+
     # game events --------------------------------------------------------------------
     def poll_events(self) -> None:
         for msg in self.link.poll():
@@ -102,11 +174,28 @@ class Bridge(QObject):
                     self._set_pc_visible(False)
             elif kind == "inventory":
                 self.inventory_open = bool(msg.get("open"))
+            elif kind == "save_loaded":
+                self.reg.played(str(msg.get("name")), msg.get("slot"))
+                if msg.get("name") == DEFAULT:
+                    self.maybe_autologin()
             elif kind == "hello":
                 # A (re)started game: it needs the screens and nothing is open.
                 self.publish_screens()
                 self.pc_wanted = self.inventory_open = False
                 self._set_pc_visible(False)
+
+    def slow_tick(self) -> None:
+        self.follow_session()
+        mtime = 0.0
+        for p in (paths.SYSTEM_CONFIG, paths.user_config(self.session_user or paths.SYSTEM_USER)):
+            try:
+                mtime = max(mtime, p.stat().st_mtime)
+            except OSError:
+                pass
+        if mtime != self.cfg_mtime:
+            self.cfg_mtime = mtime
+            self.cfg = config.effective(self.session_user)
+            self.link.send("config_reload")
 
     def _show_pc(self) -> None:
         if self.pc_wanted:
@@ -117,6 +206,7 @@ class Bridge(QObject):
             return
         self.pc_visible = visible
         self.link.send("overlay_shown", shown=visible)
+        self.publish_state()
 
     def leave_pc(self) -> None:
         self.pc_wanted = False
@@ -124,60 +214,24 @@ class Bridge(QObject):
         self._set_pc_visible(False)
         self.link.send("leave_pc")
 
-    # frames for the in-game screen ------------------------------------------------------
-    def capture_tick(self) -> None:
-        mtime = 0.0
-        for p in (paths.SYSTEM_CONFIG, paths.user_config()):
-            try:
-                mtime = max(mtime, p.stat().st_mtime)
-            except OSError:
-                pass
-        if mtime != self.cfg_mtime:
-            self.cfg_mtime = mtime
-            self.cfg = config.effective()
-            self.link.send("config_reload")
-        pc = self.cfg["pc"]
-        fps = float(pc.get("ingame_fps", 2))
-        if not pc.get("replace_ingame_ui", True) or fps <= 0 or self.pc_visible:
-            return
-        now = time.monotonic()
-        if now - self._last_capture < 1.0 / fps:
-            return
-        self._last_capture = now
-        img = self.capture.grab()
-        if img is None or img.isNull():
-            return
-        width = int(pc.get("ingame_width", 1024))
-        if img.width() > width:
-            img = img.scaledToWidth(width)
-        digest = frame_digest(img)
-        if digest == self.last_digest:
-            return
-        self.last_digest = digest
-        self.seq += 1
-        name = f"pc-{self.seq}.bmp"
-        img = img.convertToFormat(QImage.Format.Format_RGB32)
-        tmp = self.rt / "frames" / f".{name}.tmp"
-        if not img.save(str(tmp), "BMP"):
-            return
-        os.replace(tmp, self.rt / "frames" / name)
-        write_atomic(self.rt / "pc-frame.json", json.dumps(
-            {"seq": self.seq, "file": f"frames/{name}", "w": img.width(), "h": img.height()}).encode())
-        old = self.rt / "frames" / f"pc-{self.seq - 4}.bmp"
-        try:
-            old.unlink()
-        except FileNotFoundError:
-            pass
-
     # window state for the KWin script ---------------------------------------------------
+    def pc_pid(self) -> int:
+        if self.session_user:
+            pid = read_pid(self.rt / "pc-session.pid")
+            if pid:
+                return pid
+        return read_pid(self.rt / "greeter.pid")
+
     def window_state(self) -> dict:
         sec = self.secondary_screen()
         mode = self.cfg["inventory"].get("second_screen", "auto")
         inv_screen = sec if mode != "off" else ""
         return {
             "primary": self.screens()[0]["name"] if self.app.screens() else "",
-            "pc": {"pid": _read_pid(self.rt / "pc-session.pid"), "visible": self.pc_visible},
-            "inventory": {"pid": _read_pid(self.rt / "inventory.pid"),
+            "pc": {"pid": self.pc_pid(), "visible": self.pc_visible,
+                   "others": [p for p in (read_pid(self.rt / "pc-session.pid"), read_pid(self.rt / "greeter.pid"))
+                              if p and p != self.pc_pid()]},
+            "inventory": {"pid": read_pid(self.rt / "inventory.pid"),
                           "visible": self.inventory_open and bool(inv_screen), "screen": inv_screen},
             "game": {"classes": ["votv-win64-shipping.exe", "votv.exe", "steam_app_votv"]},
         }
@@ -202,7 +256,8 @@ class Adaptor(QDBusAbstractAdaptor):
     def Status(self) -> str:        # noqa: N802
         b = self.bridge
         return json.dumps({"pc_wanted": b.pc_wanted, "pc_visible": b.pc_visible,
-                           "inventory_open": b.inventory_open, "frames": b.seq,
+                           "inventory_open": b.inventory_open, "user": b.session_user,
+                           "save": b.reg.running(),
                            "game_seen_s_ago": round(time.monotonic() - b.game_seen, 1) if b.game_seen else None,
                            "screens": b.screens()})
 
@@ -227,7 +282,7 @@ def main() -> int:
     if not bus.registerService(SERVICE) or not bus.registerObject(OBJECT, holder):
         print("votv-os-bridge: D-Bus registration failed (already running?)", file=sys.stderr)
         return 1
-    (paths.runtime_dir() / "bridge.pid").write_text(str(os.getpid()))
+    write_atomic(paths.runtime_dir() / "bridge.pid", str(os.getpid()).encode())
     return app.exec()
 
 

@@ -1,5 +1,5 @@
--- File IPC with the host bridge (votv-os-bridge). Wine maps C:\ to / (LSIW),
--- so these are plain files in $XDG_RUNTIME_DIR/votv-os on the Linux side.
+-- File IPC with the host bridge (votv-os-bridge). Z:\ is / in every Wine and Proton prefix,
+-- so these are plain files in /run/totv/votv-os on the Linux side.
 --   game-events.jsonl   mod -> host, one JSON object per line (append only)
 --   host-commands.jsonl host -> mod, one JSON object per line (append only)
 --   *.json              snapshots, replaced whole
@@ -46,7 +46,7 @@ end
 -- replay the previous session's commands.
 function I.init()
     cmd_offset = U.file_size(path('host-commands.jsonl')) or 0
-    I.emit('hello', { mod = 'TotVOS', version = '1.0.0', game = '0.9.0n' })
+    I.emit('hello', { mod = 'TotVOS', version = '2.0.0', game = '0.9.0n' })
 end
 
 -- Returns the decoded commands appended since the last poll.

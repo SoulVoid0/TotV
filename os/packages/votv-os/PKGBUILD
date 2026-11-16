@@ -1,0 +1,39 @@
+# votv-os: Voices of the Void as a core part of TotV OS.
+#  - the TotVOS game mod (UE4SS Lua, loaded by shimloader) and shimloader itself
+#  - the TotV shell (the game on the real screens from boot), totvd (logins on the
+#    in-game PC), the users' KDE desktops on the in-game PC, r2modman as a system service
+#  - the apps: VotV PC, VotV Saves, VotV Mods, VotV Screen Setup, TotV Update, ...
+# The game itself lives in /.VotV/<version> (votv-os-game); r2modman in /.VotV/r2modman.
+# build.sh copies the repository's votv/ folder next to this file before makepkg.
+
+pkgname=votv-os
+pkgver=2.0.0
+pkgrel=1
+pkgdesc='Voices of the Void integration of TotV OS (TotVOS mod, shell, apps)'
+arch=(any)
+url='https://github.com/SoulVoid0/TotV'
+license=(MIT)
+install=votv-os.install
+backup=(etc/pam.d/totv-login etc/pam.d/totv-desktop)
+makedepends=(curl unzip)
+# The runtime packages (KDE Plasma for the in-game PC, Wine, ...), one list for the
+# package, the system image and the installer: votv/host/packages.x86_64.
+mapfile -t depends < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "${startdir:-.}/votv/host/packages.x86_64")
+depends+=(totv-base lsiw)
+
+build() {
+  # shimloader (Thunderstore's unreal_shimloader: UE4SS + its loader), next to the game.
+  bash "$startdir/votv/host/bin/votv-os-fetch-deps" "$srcdir/shimloader"
+}
+
+package() {
+  install -d "$startdir/votv/host/vendor"
+  rm -rf "$startdir/votv/host/vendor/shimloader"
+  cp -r "$srcdir/shimloader" "$startdir/votv/host/vendor/shimloader"
+  bash "$startdir/votv/host/install.sh" --files-only "$pkgdir"
+  # The setup script and its files, for installs that are not from the system image.
+  install -d "$pkgdir/usr/share/votv-os"
+  cp -r "$startdir/votv/host" "$pkgdir/usr/share/votv-os/host"
+  cp -r "$startdir/votv/mod" "$pkgdir/usr/share/votv-os/host/mod"
+  find "$pkgdir/usr/share/votv-os" -name '__pycache__' -prune -exec rm -rf {} +
+}

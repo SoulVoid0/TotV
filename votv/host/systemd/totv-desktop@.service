@@ -1,0 +1,18 @@
+# A user's KDE Plasma desktop on the in-game PC, started by totvd when the user logs in
+# on the in-game login screen.
+[Unit]
+Description=TotV desktop of %i (the in-game PC)
+After=totv-shell.service
+BindsTo=totv-shell.service
+
+[Service]
+User=%i
+PAMName=totv-desktop
+Environment=XDG_SESSION_TYPE=wayland XDG_SESSION_CLASS=user XDG_SESSION_DESKTOP=KDE
+Environment=TOTV_SHELL_WAYLAND=/run/totv/shell/wayland-0 TOTV_SHELL_DIR=/run/totv/shell VOTV_OS_RUNTIME_LINUX=/run/totv/votv-os
+ExecStartPre=+/usr/bin/install -d -o %i -g votv -m 0750 /run/totv/pc/%i
+ExecStart=/usr/bin/votv-pc-session
+ExecStopPost=+/usr/bin/totvd --ended %i
+ExecStopPost=+/usr/bin/rm -rf /run/totv/pc/%i
+Restart=on-failure
+RestartSec=2

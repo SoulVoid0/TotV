@@ -1,0 +1,9 @@
+# Voices of the Void and r2modman: essential parts of TotV OS (they run as the votv
+# system user, so task managers list them as system processes).
+[Unit]
+Description=TotV core (Voices of the Void, r2modman)
+Before=slices.target
+
+[Slice]
+CPUWeight=200
+IOWeight=200

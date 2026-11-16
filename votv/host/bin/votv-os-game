@@ -1,0 +1,183 @@
+#!/usr/bin/python3
+"""votv-os-game: Voices of the Void as a part of TotV OS.
+
+  votv-os-game status                 the installed versions and the current one
+  votv-os-game latest                 the newest build on itch.io (mrdrnose.itch.io/votv)
+  votv-os-game fetch DIR [--version V] download a build (zip) into DIR, print its path
+  votv-os-game install [--version V] [--root R]
+                                      download and install it into /.VotV/<version>
+  votv-os-game update [--check]       install the newest build if it is newer than the
+                                      current one (exit 100 with --check when it is)
+
+Downloads use itch.io's own download flow for free games; with ITCH_API_KEY set (an
+itch.io API key) the official API is used instead. VOTV_URL=<url of a zip> skips itch.io.
+"""
+import http.cookiejar
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+PAGE = os.environ.get("VOTV_ITCH_PAGE", "https://mrdrnose.itch.io/votv")
+ROOT = Path(os.environ.get("VOTV_ROOT", "/.VotV"))
+UA = "TotV-OS (votv-os-game)"
+VER_RE = re.compile(r"(\d+\.\d+\.\d+[a-z]?)", re.I)
+
+jar = http.cookiejar.CookieJar()
+opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+
+def get(url, data=None, headers=None):
+    h = {"User-Agent": UA, **(headers or {})}
+    if data is not None and not isinstance(data, bytes):
+        data = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=data, headers=h)
+    with opener.open(req, timeout=60) as r:
+        return r.read()
+
+
+def version_key(v):
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)([a-z]?)", v or "", re.I)
+    if not m:
+        return (-1,)
+    return (int(m[1]), int(m[2]), int(m[3]), m[4].lower())
+
+
+def uploads():
+    """[(version, filename, upload_id, download_fn)] for the Windows builds."""
+    key = os.environ.get("ITCH_API_KEY")
+    game = json.loads(get(PAGE.rstrip("/") + "/data.json"))
+    gid = game["id"]
+    out = []
+    if key:
+        auth = {"Authorization": f"Bearer {key}"}
+        d = json.loads(get(f"https://api.itch.io/games/{gid}/uploads", headers=auth))
+        for u in d.get("uploads", []):
+            if "windows" not in (u.get("traits") or []) and not u.get("p_windows"):
+                continue
+            name = u.get("filename") or u.get("display_name") or ""
+            m = VER_RE.search(name) or VER_RE.search(u.get("display_name") or "")
+            uid = u["id"]
+            out.append((m[1] if m else "", name, uid,
+                        lambda uid=uid: json.loads(get(f"https://api.itch.io/uploads/{uid}/download", headers=auth)).get("url")
+                        or f"https://api.itch.io/uploads/{uid}/download?api_key={key}"))
+        return out
+    # The page's own flow for free / name-your-own-price games.
+    page = get(PAGE).decode("utf-8", "replace")
+    csrf = re.search(r'name="csrf_token"\s+value="([^"]+)"', page) or re.search(r'csrf_token"\s*content="([^"]+)"', page)
+    r = json.loads(get(PAGE.rstrip("/") + "/download_url", {"csrf_token": csrf[1] if csrf else ""}))
+    dl_page = get(r["url"]).decode("utf-8", "replace")
+    dl_key = r["url"].rstrip("/").rsplit("/", 1)[-1]
+    csrf2 = re.search(r'name="csrf_token"\s+value="([^"]+)"', dl_page) or re.search(r'csrf_token"\s*content="([^"]+)"', dl_page)
+    for m in re.finditer(r'data-upload_id="(\d+)".*?class="name"[^>]*title="([^"]+)"', dl_page, re.S):
+        uid, name = m[1], m[2]
+        if not name.lower().endswith((".zip", ".7z", ".rar")):
+            continue
+        v = VER_RE.search(name)
+
+        def fn(uid=uid):
+            q = urllib.parse.urlencode({"source": "game_download", "key": dl_key})
+            d = json.loads(get(f"{PAGE.rstrip('/')}/file/{uid}?{q}", {"csrf_token": csrf2[1] if csrf2 else ""}))
+            return d["url"]
+        out.append((v[1] if v else "", name, uid, fn))
+    return out
+
+
+def latest(version=None):
+    ups = [u for u in uploads() if u[0]]
+    if version:
+        ups = [u for u in ups if u[0].lower() == version.lower()]
+    if not ups:
+        raise SystemExit("votv-os-game: no matching Windows build found on " + PAGE)
+    return max(ups, key=lambda u: version_key(u[0]))
+
+
+def fetch(dest, version=None):
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    url = os.environ.get("VOTV_URL")
+    if url:
+        name = os.path.basename(urllib.parse.urlparse(url).path) or f"votv-{version or 'unknown'}.zip"
+    else:
+        v, name, _uid, fn = latest(version)
+        url = fn()
+        if not VER_RE.search(name):
+            name = f"votv-{v}.zip"
+    out = dest / name
+    print(f"downloading {name} ...", file=sys.stderr)
+    subprocess.run(["curl", "-fL", "--retry", "3", "-A", UA, "-o", str(out), url], check=True)
+    return out
+
+
+def current():
+    try:
+        return os.readlink(ROOT / "current")
+    except OSError:
+        return None
+
+
+def install(version=None, root="/"):
+    work = Path(root) / ".VotV" / ".download"
+    try:
+        z = fetch(work, version)
+        v = VER_RE.search(z.name)
+        subprocess.run(["votv-os-install-game", "--root", root] + (["--version", v[1]] if v else []) + [str(z)],
+                       check=True)
+    finally:
+        subprocess.run(["rm", "-rf", str(work)])
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+    cmd, rest = argv[0], argv[1:]
+    opt = {}
+    i = 0
+    pos = []
+    while i < len(rest):
+        if rest[i] in ("--version", "--root"):
+            opt[rest[i][2:]] = rest[i + 1]
+            i += 2
+        else:
+            pos.append(rest[i])
+            i += 1
+    if cmd == "status":
+        print("current:", current() or "none")
+        for d in sorted(ROOT.glob("*/.votv-version")):
+            print("installed:", d.parent.name)
+        return 0
+    if cmd == "latest":
+        v, name, _u, _f = latest()
+        print(v, name)
+        return 0
+    if cmd == "fetch" and pos:
+        print(fetch(pos[0], opt.get("version")))
+        return 0
+    if cmd == "install":
+        install(opt.get("version"), opt.get("root", "/"))
+        return 0
+    if cmd == "update":
+        try:
+            v = latest()[0]
+        except Exception as e:   # no network, itch.io changed: not fatal for an OS update
+            print(f"votv-os-game: cannot check for a new build: {e}", file=sys.stderr)
+            return 0
+        cur = current()
+        newer = version_key(v) > version_key(cur or "")
+        print(f"Voices of the Void: installed {cur or 'none'}, newest {v}{' (update available)' if newer else ''}")
+        if "--check" in pos:
+            return 100 if newer else 0
+        if newer:
+            install(v)
+        return 0
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
