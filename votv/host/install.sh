@@ -137,9 +137,9 @@ for u in $users; do
 done
 
 # 4. LSIW for the game: Wine (always installed), GE-Proton when there is a network --------------
-# The votv user's own LSIW settings: Wine from PATH; its Proton prefix keeps its own C:
-# (Proton's C:\users\steamuser must not be /users/steamuser, a human user's home);
-# the game reaches the system through Z:\ (= /). /users/votv is its Windows profile.
+# The votv user's own LSIW settings: Wine from PATH, no update check. The game reaches the
+# system through Z:\ (= /). /users/votv and /users/steamuser (Proton's profile, C:\users\
+# steamuser, since C: is /) are the game user's home: it must be able to write there.
 install -d "$ROOT/var/lib/votv/.config/lsiw"
 cat > "$ROOT/var/lib/votv/.config/lsiw/lsiw.conf" <<'EOS'
 # LSIW for the votv system user (Voices of the Void on TotV OS), from votv-os.
@@ -153,6 +153,9 @@ full_c_drive = false
 check = false
 EOS
 ln -sfn /var/lib/votv "$ROOT/users/votv" 2>/dev/null || true
+# Proton's profile C:\users\steamuser is /users/steamuser (C: is /): the game's user's.
+ln -sfn /var/lib/votv "$ROOT/users/steamuser" 2>/dev/null || true
+in_root chown -h votv:cdrive /users/steamuser 2>/dev/null || true
 in_root chown -R votv:votv /var/lib/votv
 in_root chown -h votv:cdrive /users/votv 2>/dev/null || true
 if [ "$OFFLINE" != 1 ]; then

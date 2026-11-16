@@ -630,8 +630,16 @@ do_users() {
     fi
     # C:\users\<name> is the user's profile, for every LSIW engine.
     ln -sfn "/home/$USERNAME" "$TARGET/users/$USERNAME"
-    ln -sfn "/home/$USERNAME" "$TARGET/users/steamuser"
-    in_target chown -h "$USERNAME:cdrive" "/users/$USERNAME" "/users/steamuser"
+    in_target chown -h "$USERNAME:cdrive" "/users/$USERNAME"
+    # Proton's Windows profile (C:\users\steamuser, = /users/steamuser since C: is /) is
+    # the profile of the game's system user: Voices of the Void runs as votv.
+    if in_target getent passwd votv >/dev/null 2>&1; then
+        ln -sfn /var/lib/votv "$TARGET/users/steamuser"
+        in_target chown -h votv:cdrive /users/steamuser
+    else
+        ln -sfn "/home/$USERNAME" "$TARGET/users/steamuser"
+        in_target chown -h "$USERNAME:cdrive" /users/steamuser
+    fi
     # AUTOLOGIN (totv.conf): totvd logs the user in once the shared Home save has loaded.
     :
 }

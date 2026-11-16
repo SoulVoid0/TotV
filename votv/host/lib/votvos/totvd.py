@@ -274,6 +274,30 @@ class Helper:
                 pass
 
 
+def ensure_proton_profile() -> None:
+    """C:\\users\\steamuser (Proton's Windows profile) is /users/steamuser, because C: is /
+    on TotV. The game runs as votv, so it must be votv's home; older installs pointed it at
+    the installer's user, and Proton could not create the game's prefix."""
+    link = Path("/users/steamuser")
+    try:
+        votv = pwd.getpwnam(paths.SYSTEM_USER)
+        if link.is_symlink() and os.readlink(link) == votv.pw_dir:
+            return
+        if link.exists() and not link.is_symlink():
+            return   # a real folder someone made: leave it
+        tmp = Path("/users/.steamuser.totvd")
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        tmp.symlink_to(votv.pw_dir)
+        os.lchown(tmp, votv.pw_uid, grp.getgrnam("cdrive").gr_gid)
+        os.replace(tmp, link)
+        print(f"totvd: /users/steamuser -> {votv.pw_dir}", file=sys.stderr)
+    except (KeyError, OSError) as e:
+        print(f"totvd: cannot fix /users/steamuser: {e}", file=sys.stderr)
+
+
 def main() -> int:
     if len(sys.argv) == 3 and sys.argv[1] == "--ended":
         from .bridge import totvd
@@ -283,6 +307,7 @@ def main() -> int:
         print("totvd must run as root", file=sys.stderr)
         return 1
     RT.mkdir(parents=True, exist_ok=True)
+    ensure_proton_profile()
     helper = Helper()
     path = paths.LOGIN_SOCKET
     if os.environ.get("LISTEN_FDS") == "1":
