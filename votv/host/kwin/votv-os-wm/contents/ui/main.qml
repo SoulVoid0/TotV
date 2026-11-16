@@ -16,6 +16,7 @@ Item {
     id: root
     property bool pcWasVisible: false
     property bool invWasVisible: false
+    property string lastError: ""
 
     DBusCall {
         id: stateCall
@@ -24,7 +25,12 @@ Item {
         dbusInterface: "org.totv.VotvOS"
         method: "WindowState"
         onFinished: (returnValue) => {
-            try { root.apply(JSON.parse(returnValue[0])); } catch (e) { console.warn("votv-os-wm:", e); }
+            try { root.apply(JSON.parse(returnValue[0])); }
+            catch (e) {
+                // Once per distinct error: this runs ten times a second.
+                const msg = String(e);
+                if (msg !== root.lastError) { root.lastError = msg; console.warn("votv-os-wm:", msg); }
+            }
         }
     }
 
@@ -86,7 +92,8 @@ Item {
         const invVisible = !!s.inventory.visible && invOut !== null;
         let game = null, pc = null, inv = null;
         const others = (s.pc.others || []);
-        const list = Workspace.windowList();
+        // KWin 6 QML: the window list is the property Workspace.windows (windowList() is the JS API's).
+        const list = Workspace.windows;
         for (let i = 0; i < list.length; ++i) {
             const w = list[i];
             if (!w.normalWindow) continue;

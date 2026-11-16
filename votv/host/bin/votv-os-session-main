@@ -36,7 +36,9 @@ start votv-inventory
 fails=()
 while :; do
     started=$(date +%s)
-    votv-os-launch-game &
+    # The game's own output (Wine/Proton, LSIW) in a log of its own, newest start last.
+    echo "== game start $(date -Is)" >>"$RT/game.log"
+    votv-os-launch-game >>"$RT/game.log" 2>&1 &
     game=$!
     while kill -0 "$game" 2>/dev/null; do
         if [ -e "$RT/restart-game" ]; then
@@ -59,7 +61,14 @@ rm -f /.VotV/r2modman/r2modmanPlus-local/VotV/profiles/*/totv-pending.json
     for t in "${fails[@]}"; do [ $((now - t)) -lt 120 ] && recent=$((recent + 1)); done
     echo "game exited with $code after $((now - started))s ($recent recent failures)"
     if [ "$recent" -ge 3 ]; then
-        command -v kdialog >/dev/null && kdialog --error "Voices of the Void stopped three times in two minutes.\nSee $RT/session.log and the game's UE4SS.log.\nIt starts again when you choose Restart in VotV Saves or r2modman." &
+        last=$(grep -v -e '^qml:' -e '^$' "$RT/game.log" | tail -n 25)
+        command -v kdialog >/dev/null && kdialog --title "Voices of the Void" --error "Voices of the Void stopped three times in two minutes.
+
+Last lines of $RT/game.log:
+
+$last
+
+It starts again with Restart Voices of the Void (on the desktop) or r2modman's Start modded." &
         until [ -e "$RT/restart-game" ]; do sleep 2; done
         rm -f "$RT/restart-game"
 # Mods changed in VotV Mods are applied by this (re)start.
